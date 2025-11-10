@@ -1,3 +1,82 @@
+# Kubernetes kubeadm Cluster Project - Git Ignore
+
+# ============================================
+# Sensitive Deployment Information
+# ============================================
+deployment-info.txt
+*.pem
+*.key
+!*.key.example
+
+# ============================================
+# Terraform
+# ============================================
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+
+# ============================================
+# Kubernetes
+# ============================================
+kubeconfig
+*.kubeconfig
+.kube/
+
+# ============================================
+# Helm
+# ============================================
+charts/*.tgz
+*.lock
+
+# ============================================
+# Secrets and Credentials
+# ============================================
+secrets.yaml
+*-secret.yaml
+credentials.json
+.env
+.env.local
+
+# ============================================
+# ArgoCD
+# ============================================
+argocd-initial-admin-secret.yaml
+
+# ============================================
+# Logs and Temporary Files
+# ============================================
+*.log
+*.tmp
+.DS_Store
+*.swp
+*.swo
+*~
+
+# ============================================
+# IDE and Editor
+# ============================================
+.vscode/
+.idea/
+*.iml
+
+# ============================================
+# Build Artifacts
+# ============================================
+*.zip
+*.tar.gz
+*.rpm
+*.deb
+
+# ============================================
+# Local Testing
+# ============================================
+test-outputs/
+tmp/
+temp/
+
 .DS_Store
 *.tfvars
 .terraform
