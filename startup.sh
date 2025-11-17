@@ -258,6 +258,14 @@ if [ -n "$KEY_NAME" ] && [ -f "${SCRIPT_DIR}/${KEY_NAME}.pem" ]; then
     echo ""
 fi
 
+# Update kubeconfig with new master IP
+if [ -f ~/.kube/config-retail-store ]; then
+    echo "Updating kubeconfig with new master IP..."
+    scp -o StrictHostKeyChecking=no -i $KEY_FILE ubuntu@$MASTER_PUBLIC_IP:~/.kube/config ~/.kube/config-retail-store 2>/dev/null
+    sed -i "s|server: https://.*:6443|server: https://${MASTER_PUBLIC_IP}:6443|g" ~/.kube/config-retail-store
+    echo "✓ Kubeconfig updated"
+fi
+
 echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   Startup Complete!                           ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}\n"

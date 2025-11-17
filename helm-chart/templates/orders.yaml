@@ -1,0 +1,63 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.orders.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.orders.name }}
+spec:
+  replicas: {{ .Values.orders.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.orders.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.orders.name }}
+    spec:
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+      - name: {{ .Values.orders.name }}
+        image: "{{ .Values.global.ecr.registry }}/{{ .Values.orders.image.repository }}:{{ .Values.orders.image.tag }}"
+        imagePullPolicy: {{ .Values.orders.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.orders.service.targetPort }}
+          protocol: TCP
+        env:
+        {{- range .Values.orders.env }}
+        - name: {{ .name }}
+          value: {{ .value | quote }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.orders.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: {{ .Values.orders.service.targetPort }}
+          initialDelaySeconds: 45
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: {{ .Values.orders.service.targetPort }}
+          initialDelaySeconds: 30
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.orders.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.orders.name }}
+spec:
+  type: {{ .Values.orders.service.type }}
+  ports:
+  - port: {{ .Values.orders.service.port }}
+    targetPort: {{ .Values.orders.service.targetPort }}
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ .Values.orders.name }}

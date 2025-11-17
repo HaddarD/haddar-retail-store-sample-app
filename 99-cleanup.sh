@@ -2,12 +2,15 @@
 
 ################################################################################
 # Kubernetes kubeadm Cluster - Complete Cleanup Script
-# This script removes ALL AWS resources created by the infrastructure script:
+# This script removes ALL AWS resources and Kubernetes deployments:
+# - Helm releases (applications + dependencies)
+# - Kubernetes namespace
+# - DynamoDB table
 # - EC2 instances (master + 2 workers)
 # - Security group
 # - IAM role and instance profile
 # - SSH key pair (from AWS, keeps local file)
-# - ECR repositories (added in Chat 3)
+# - ECR repositories
 ################################################################################
 
 # Colors
@@ -50,7 +53,8 @@ fi
 # Load variables
 source deployment-info.txt
 
-# ECR repositories to delete
+# Configuration
+NAMESPACE="${NAMESPACE:-retail-store}"
 ECR_REPOSITORIES=(
     "retail-store-ui"
     "retail-store-catalog"
@@ -64,20 +68,21 @@ echo -e "${RED}"
 echo "╔═══════════════════════════════════════════════════════╗"
 echo "║              ⚠️  WARNING: CLEANUP SCRIPT  ⚠️           ║"
 echo "║                                                       ║"
-echo "║  This will DELETE all AWS resources created by       ║"
-echo "║  this project, including:                            ║"
+echo "║  This will DELETE all AWS resources and              ║"
+echo "║  Kubernetes deployments created by this project:     ║"
 echo "║                                                       ║"
+echo "║  KUBERNETES:                                         ║"
+echo "║  • All Helm releases (retail-store, postgres, etc)   ║"
+echo "║  • Namespace: ${NAMESPACE}                          ║"
+echo "║                                                       ║"
+echo "║  AWS RESOURCES:                                      ║"
 echo "║  • 3 EC2 Instances (master + 2 workers)              ║"
+echo "║  • DynamoDB Table: ${DYNAMODB_TABLE_NAME:-retail-store-cart}            ║"
 echo "║  • Security Group: ${SECURITY_GROUP_NAME}                    ║"
 echo "║  • IAM Role: ${IAM_ROLE_NAME}              ║"
 echo "║  • IAM Instance Profile: ${IAM_INSTANCE_PROFILE_NAME}     ║"
 echo "║  • SSH Key Pair from AWS                             ║"
 echo "║  • 5 ECR Repositories (and all images)               ║"
-echo "║                                                       ║"
-echo "║  Instance IDs:                                       ║"
-echo "║    - Master:  ${MASTER_INSTANCE_ID}           ║"
-echo "║    - Worker1: ${WORKER1_INSTANCE_ID}          ║"
-echo "║    - Worker2: ${WORKER2_INSTANCE_ID}          ║"
 echo "║                                                       ║"
 echo "║  ⚠️  This action CANNOT be undone!                    ║"
 echo "╚═══════════════════════════════════════════════════════╝"
@@ -94,8 +99,97 @@ fi
 echo -e "\n${YELLOW}Starting cleanup in 5 seconds... Press Ctrl+C to cancel${NC}"
 sleep 5
 
+# Cleanup Helm releases and Kubernetes resources
+print_header "Step 1: Cleaning Up Helm Releases & Kubernetes"
+
+# Check if Helm is installed
+if command -v helm &> /dev/null; then
+    # Check if kubeconfig exists
+    if [ -f ~/.kube/config-retail-store ]; then
+        export KUBECONFIG=~/.kube/config-retail-store
+        print_info "Using kubeconfig: ~/.kube/config-retail-store"
+        
+        # Set insecure skip TLS verify
+        kubectl config set-cluster kubernetes --insecure-skip-tls-verify=true 2>/dev/null
+    fi
+    
+    # Check if kubectl can connect
+    if kubectl get nodes &> /dev/null 2>&1; then
+        print_info "Connected to Kubernetes cluster"
+        
+        # Uninstall retail store application
+        if helm list -n ${NAMESPACE} 2>/dev/null | grep -q "retail-store"; then
+            print_info "Uninstalling retail-store Helm release..."
+            helm uninstall retail-store -n ${NAMESPACE} --wait --timeout 2m 2>/dev/null || print_warning "Failed to uninstall retail-store"
+            print_success "Retail store uninstalled"
+        else
+            print_info "Retail store not found"
+        fi
+        
+        # Uninstall dependencies
+        DEPENDENCIES=("postgresql" "redis" "rabbitmq")
+        for dep in "${DEPENDENCIES[@]}"; do
+            if helm list -n ${NAMESPACE} 2>/dev/null | grep -q "^${dep}"; then
+                print_info "Uninstalling ${dep}..."
+                helm uninstall ${dep} -n ${NAMESPACE} --wait --timeout 2m 2>/dev/null || print_warning "Failed to uninstall ${dep}"
+                print_success "${dep} uninstalled"
+            else
+                print_info "${dep} not found"
+            fi
+        done
+        
+        # Uninstall NGINX Ingress
+        if helm list -n ingress-nginx 2>/dev/null | grep -q "ingress-nginx"; then
+            print_info "Uninstalling NGINX Ingress Controller..."
+            helm uninstall ingress-nginx -n ingress-nginx --wait --timeout 2m 2>/dev/null || print_warning "Failed to uninstall ingress-nginx"
+            print_success "NGINX Ingress uninstalled"
+        else
+            print_info "NGINX Ingress not found"
+        fi
+        
+        # Delete namespaces
+        if kubectl get namespace ${NAMESPACE} &> /dev/null 2>&1; then
+            print_info "Deleting namespace: ${NAMESPACE}"
+            kubectl delete namespace ${NAMESPACE} --wait=false 2>/dev/null || print_warning "Failed to delete namespace"
+            print_success "Namespace deletion initiated"
+        fi
+        
+        if kubectl get namespace ingress-nginx &> /dev/null 2>&1; then
+            print_info "Deleting namespace: ingress-nginx"
+            kubectl delete namespace ingress-nginx --wait=false 2>/dev/null || print_warning "Failed to delete namespace"
+            print_success "Ingress namespace deletion initiated"
+        fi
+        
+        print_success "Kubernetes resources cleaned up"
+    else
+        print_warning "Cannot connect to Kubernetes cluster - skipping Helm cleanup"
+        print_info "Cluster may already be destroyed"
+    fi
+else
+    print_warning "Helm not installed - skipping Helm cleanup"
+fi
+
+# Delete DynamoDB table
+print_header "Step 2: Deleting DynamoDB Table"
+
+if [ -n "$DYNAMODB_TABLE_NAME" ]; then
+    DYNAMODB_REGION="${DYNAMODB_REGION:-${REGION}}"
+    
+    if aws dynamodb describe-table --table-name "${DYNAMODB_TABLE_NAME}" --region ${DYNAMODB_REGION} &> /dev/null; then
+        print_info "Deleting DynamoDB table: ${DYNAMODB_TABLE_NAME}"
+        aws dynamodb delete-table \
+            --table-name "${DYNAMODB_TABLE_NAME}" \
+            --region ${DYNAMODB_REGION} > /dev/null
+        print_success "DynamoDB table deleted: ${DYNAMODB_TABLE_NAME}"
+    else
+        print_warning "DynamoDB table not found or already deleted"
+    fi
+else
+    print_info "No DynamoDB table configured"
+fi
+
 # Disassociate IAM instance profiles
-print_header "Step 1: Disassociating IAM Instance Profiles"
+print_header "Step 3: Disassociating IAM Instance Profiles"
 
 for instance_id in ${MASTER_INSTANCE_ID} ${WORKER1_INSTANCE_ID} ${WORKER2_INSTANCE_ID}; do
     ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
@@ -116,7 +210,7 @@ for instance_id in ${MASTER_INSTANCE_ID} ${WORKER1_INSTANCE_ID} ${WORKER2_INSTAN
 done
 
 # Terminate EC2 instances
-print_header "Step 2: Terminating EC2 Instances"
+print_header "Step 4: Terminating EC2 Instances"
 
 print_info "Terminating all instances..."
 aws ec2 terminate-instances \
@@ -133,7 +227,7 @@ aws ec2 wait instance-terminated \
 print_success "All EC2 instances terminated"
 
 # Delete security group
-print_header "Step 3: Deleting Security Group"
+print_header "Step 5: Deleting Security Group"
 
 print_info "Waiting for network interfaces to detach (10 seconds)..."
 sleep 10
@@ -149,7 +243,7 @@ else
 fi
 
 # Delete IAM resources
-print_header "Step 4: Deleting IAM Resources"
+print_header "Step 6: Deleting IAM Resources"
 
 # Remove role from instance profile
 if aws iam get-instance-profile --instance-profile-name ${IAM_INSTANCE_PROFILE_NAME} &> /dev/null; then
@@ -204,7 +298,7 @@ else
 fi
 
 # Delete SSH key pair from AWS
-print_header "Step 5: Deleting SSH Key Pair from AWS"
+print_header "Step 7: Deleting SSH Key Pair from AWS"
 
 if aws ec2 describe-key-pairs --key-names ${KEY_NAME} --region ${REGION} &> /dev/null; then
     print_info "Deleting key pair from AWS: ${KEY_NAME}"
@@ -215,7 +309,7 @@ else
 fi
 
 # Delete ECR repositories
-print_header "Step 6: Deleting ECR Repositories"
+print_header "Step 8: Deleting ECR Repositories"
 
 ECR_DELETED=0
 for REPO_NAME in "${ECR_REPOSITORIES[@]}"; do
@@ -242,9 +336,9 @@ else
 fi
 
 # Clean up local files
-print_header "Step 7: Cleaning Up Local Files"
+print_header "Step 9: Cleaning Up Local Files"
 
-echo -e "${YELLOW}Do you want to delete local files? (deployment-info.txt, SSH key, etc.)${NC}"
+echo -e "${YELLOW}Do you want to delete local files? (deployment-info.txt, SSH key, kubeconfig, etc.)${NC}"
 echo -n "Type 'yes' to delete local files, or press Enter to keep them: "
 read -r delete_local
 
@@ -261,6 +355,12 @@ if [ "$delete_local" = "yes" ]; then
         print_success "Deleted: ${KEY_FILE}"
     fi
     
+    # Delete kubeconfig
+    if [ -f ~/.kube/config-retail-store ]; then
+        rm -f ~/.kube/config-retail-store
+        print_success "Deleted: ~/.kube/config-retail-store"
+    fi
+    
     # Delete temporary files
     rm -f /tmp/ec2-trust-policy.json
     rm -f /tmp/ecr-access-policy.json
@@ -274,6 +374,7 @@ else
     print_warning "Remember to manually delete sensitive files when done:"
     print_warning "  - ${KEY_FILE} (SSH private key)"
     print_warning "  - deployment-info.txt (contains IPs and IDs)"
+    print_warning "  - ~/.kube/config-retail-store (cluster access)"
 fi
 
 # Summary
@@ -282,6 +383,11 @@ print_header "Cleanup Summary"
 echo -e "${GREEN}✓ All AWS resources deleted${NC}"
 echo ""
 echo -e "${BLUE}Resources Deleted:${NC}"
+echo "  • Kubernetes Deployments:"
+echo "    - Helm releases (retail-store, postgresql, redis, rabbitmq)"
+echo "    - Namespace: ${NAMESPACE}"
+echo "    - NGINX Ingress Controller"
+echo "  • DynamoDB Table: ${DYNAMODB_TABLE_NAME:-retail-store-cart}"
 echo "  • EC2 Instances:"
 echo "    - Master:  ${MASTER_INSTANCE_ID}"
 echo "    - Worker1: ${WORKER1_INSTANCE_ID}"
@@ -306,15 +412,16 @@ else
     echo -e "${YELLOW}⚠ Local files kept${NC}"
     echo "  • ${KEY_FILE}"
     echo "  • deployment-info.txt"
+    echo "  • ~/.kube/config-retail-store"
 fi
 
 echo ""
 echo -e "${BLUE}What's Remaining:${NC}"
-echo "  • Source code files (scripts, requirements.txt)"
+echo "  • Source code files (scripts, helm-chart, etc.)"
 echo "  • CloudWatch Logs (will expire automatically)"
 
 if [ "$delete_local" != "yes" ]; then
-    echo "  • Local SSH key and deployment info (delete manually if needed)"
+    echo "  • Local SSH key, deployment info, and kubeconfig (delete manually if needed)"
 fi
 
 echo -e "\n${YELLOW}Note: CloudWatch log groups may remain but will expire automatically.${NC}"
@@ -327,4 +434,6 @@ echo -e "${GREEN}╚════════════════════
 echo -e "${BLUE}To recreate the infrastructure, run:${NC}"
 echo -e "  ${YELLOW}./01-infrastructure.sh${NC}"
 echo -e "  ${YELLOW}./02-k8s-init.sh${NC}"
-echo -e "  ${YELLOW}./03-ecr-setup.sh${NC}\n"
+echo -e "  ${YELLOW}./03-ecr-setup.sh${NC}"
+echo -e "  ${YELLOW}./05-dynamodb-setup.sh${NC}"
+echo -e "  ${YELLOW}./06-helm-deploy.sh${NC}\n"

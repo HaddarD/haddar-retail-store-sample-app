@@ -1,0 +1,156 @@
+# Global configuration
+global:
+  ecr:
+    registry: "" # Will be set via --set flag during deployment
+  dynamodb:
+    tableName: "" # Will be set via --set flag during deployment
+    region: "us-east-1"
+
+# UI Service
+ui:
+  name: ui
+  replicaCount: 1
+  image:
+    repository: retail-store-ui
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  env:
+    - name: CATALOG_ENDPOINT
+      value: "http://catalog:80"
+    - name: CARTS_ENDPOINT
+      value: "http://cart:80"
+    - name: ORDERS_ENDPOINT
+      value: "http://orders:80"
+    - name: CHECKOUT_ENDPOINT
+      value: "http://checkout:80"
+
+# Catalog Service
+catalog:
+  name: catalog
+  replicaCount: 1
+  image:
+    repository: retail-store-catalog
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  env:
+    - name: DB_ENDPOINT
+      value: "postgresql.retail-store.svc.cluster.local:5432"
+    - name: DB_NAME
+      value: "catalog"
+    - name: DB_USER
+      value: "postgres"
+    - name: DB_PASSWORD
+      value: "postgres"
+
+# Cart Service
+cart:
+  name: cart
+  replicaCount: 1
+  image:
+    repository: retail-store-cart
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  env:
+    - name: REDIS_ENDPOINT
+      value: "redis-master.retail-store.svc.cluster.local:6379"
+    - name: CARTS_DYNAMODB_TABLENAME
+      value: "" # Will be set from global.dynamodb.tableName
+    - name: AWS_DEFAULT_REGION
+      value: "" # Will be set from global.dynamodb.region
+
+# Orders Service
+orders:
+  name: orders
+  replicaCount: 1
+  image:
+    repository: retail-store-orders
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  env:
+    - name: DB_ENDPOINT
+      value: "postgresql.retail-store.svc.cluster.local:5432"
+    - name: DB_NAME
+      value: "catalog"
+    - name: DB_USER
+      value: "postgres"
+    - name: DB_PASSWORD
+      value: "postgres"
+
+# Checkout Service
+checkout:
+  name: checkout
+  replicaCount: 1
+  image:
+    repository: retail-store-checkout
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  env:
+    - name: ORDERS_ENDPOINT
+      value: "http://orders:80"
+    - name: CARTS_ENDPOINT
+      value: "http://cart:80"
+    - name: RABBITMQ_ENDPOINT
+      value: "rabbitmq.retail-store.svc.cluster.local:5672"
+    - name: RABBITMQ_USERNAME
+      value: "guest"
+    - name: RABBITMQ_PASSWORD
+      value: "guest"
+
+# Image Pull Secrets
+imagePullSecrets:
+  - name: regcred

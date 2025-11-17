@@ -1,0 +1,63 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.checkout.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.checkout.name }}
+spec:
+  replicas: {{ .Values.checkout.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.checkout.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.checkout.name }}
+    spec:
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+      - name: {{ .Values.checkout.name }}
+        image: "{{ .Values.global.ecr.registry }}/{{ .Values.checkout.image.repository }}:{{ .Values.checkout.image.tag }}"
+        imagePullPolicy: {{ .Values.checkout.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.checkout.service.targetPort }}
+          protocol: TCP
+        env:
+        {{- range .Values.checkout.env }}
+        - name: {{ .name }}
+          value: {{ .value | quote }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.checkout.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.checkout.service.targetPort }}
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.checkout.service.targetPort }}
+          initialDelaySeconds: 20
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.checkout.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.checkout.name }}
+spec:
+  type: {{ .Values.checkout.service.type }}
+  ports:
+  - port: {{ .Values.checkout.service.port }}
+    targetPort: {{ .Values.checkout.service.targetPort }}
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ .Values.checkout.name }}
