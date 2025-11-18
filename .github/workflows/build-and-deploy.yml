@@ -11,62 +11,26 @@ env:
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
 jobs:
-  # Job to detect which services changed
+# Job to detect which services changed
   detect-changes:
     name: Detect Changed Services
     runs-on: ubuntu-latest
     outputs:
-      ui: ${{ steps.changes.outputs.ui }}
-      catalog: ${{ steps.changes.outputs.catalog }}
-      cart: ${{ steps.changes.outputs.cart }}
-      orders: ${{ steps.changes.outputs.orders }}
-      checkout: ${{ steps.changes.outputs.checkout }}
+      ui: ${{ steps.set-all.outputs.ui }}
+      catalog: ${{ steps.set-all.outputs.catalog }}
+      cart: ${{ steps.set-all.outputs.cart }}
+      orders: ${{ steps.set-all.outputs.orders }}
+      checkout: ${{ steps.set-all.outputs.checkout }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2  # Fetch last 2 commits to detect changes
-
-      - name: Detect changes in services
-        id: changes
+      - name: Build all services on every push
+        id: set-all
         run: |
-          echo "Detecting changed services..."
-          
-          # Check each service directory for changes
-          if git diff --name-only HEAD^ HEAD | grep -q "^src/ui/"; then
-            echo "ui=true" >> $GITHUB_OUTPUT
-            echo "✓ UI service changed"
-          else
-            echo "ui=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if git diff --name-only HEAD^ HEAD | grep -q "^src/catalog/"; then
-            echo "catalog=true" >> $GITHUB_OUTPUT
-            echo "✓ Catalog service changed"
-          else
-            echo "catalog=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if git diff --name-only HEAD^ HEAD | grep -q "^src/cart/"; then
-            echo "cart=true" >> $GITHUB_OUTPUT
-            echo "✓ Cart service changed"
-          else
-            echo "cart=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if git diff --name-only HEAD^ HEAD | grep -q "^src/orders/"; then
-            echo "orders=true" >> $GITHUB_OUTPUT
-            echo "✓ Orders service changed"
-          else
-            echo "orders=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if git diff --name-only HEAD^ HEAD | grep -q "^src/checkout/"; then
-            echo "checkout=true" >> $GITHUB_OUTPUT
-            echo "✓ Checkout service changed"
-          else
-            echo "checkout=false" >> $GITHUB_OUTPUT
-          fi
+          echo "Building ALL services (project requirement)"
+          echo "ui=true" >> $GITHUB_OUTPUT
+          echo "catalog=true" >> $GITHUB_OUTPUT
+          echo "cart=true" >> $GITHUB_OUTPUT
+          echo "orders=true" >> $GITHUB_OUTPUT
+          echo "checkout=true" >> $GITHUB_OUTPUT
 
   # Build UI service
   build-ui:
