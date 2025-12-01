@@ -16,8 +16,7 @@ spec:
       labels:
         app: {{ .Values.orders.name }}
     spec:
-      imagePullSecrets:
-        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      # imagePullSecrets removed - using ECR Credential Helper
       containers:
       - name: {{ .Values.orders.name }}
         image: "{{ .Values.global.ecr.registry }}/{{ .Values.orders.image.repository }}:{{ .Values.orders.image.tag }}"

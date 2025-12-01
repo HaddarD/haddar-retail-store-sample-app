@@ -4,151 +4,91 @@
 
 This project uses a **two-repository GitOps architecture**:
 
-1. **Application Repository** (`retail-store-sample-app`) - Source code and CI/CD
-2. **GitOps Repository** (`retail-store-gitops`) - Kubernetes configurations
+1. **Application Repository** (`haddar-retail-store-sample-app`) - Source code, Terraform IaC, CI/CD
+2. **GitOps Repository** (`gitops-retail-store-app`) - Kubernetes configurations
 
 ---
 
 ## Repository 1: Application Repository
 
-**URL:** `https://github.com/<username>/retail-store-sample-app`
+**URL:** `https://github.com/HaddarD/haddar-retail-store-sample-app`
 
-**Purpose:** Contains application source code, CI/CD pipeline, and infrastructure scripts.
+**Purpose:** Contains application source code, complete Terraform infrastructure, CI/CD pipeline, and automation scripts.
 
 ### Structure:
 ```
-retail-store-sample-app/
+haddar-retail-store-sample-app/
+│
+├── terraform/                        # 🏗️ Complete Infrastructure as Code
+│   ├── main.tf                       # Provider, S3 backend, data sources
+│   ├── variables.tf                  # Input variables with defaults
+│   ├── outputs.tf                    # Exported values for scripts
+│   ├── versions.tf                   # Version constraints
+│   ├── terraform.tfvars              # Configuration values (in Git)
+│   ├── vpc.tf                        # VPC, subnet, IGW, routes
+│   ├── security-groups.tf            # Kubernetes security group
+│   ├── iam.tf                        # IAM role + ECR/DynamoDB policies
+│   ├── ec2.tf                        # 3 EC2 instances with user_data
+│   ├── ecr.tf                        # 5 ECR repositories
+│   └── dynamodb.tf                   # Cart table
 │
 ├── src/                              # 📦 Application Source Code
 │   ├── ui/                           # Java Spring Boot - Frontend
-│   │   ├── src/
-│   │   ├── Dockerfile
-│   │   └── pom.xml
-│   │
 │   ├── catalog/                      # Go - Product Catalog API
-│   │   ├── main.go
-│   │   ├── Dockerfile
-│   │   └── go.mod
-│   │
 │   ├── cart/                         # Java Spring Boot - Shopping Cart
-│   │   ├── src/
-│   │   ├── Dockerfile
-│   │   └── pom.xml
-│   │
 │   ├── orders/                       # Java Spring Boot - Order Management
-│   │   ├── src/
-│   │   ├── Dockerfile
-│   │   └── pom.xml
-│   │
 │   └── checkout/                     # Node.js - Checkout Process
-│       ├── src/
-│       ├── Dockerfile
-│       └── package.json
 │
-├── .github/                          # 🔄 CI/CD Pipeline
-│   └── workflows/
-│       └── build-and-deploy.yml      # GitHub Actions workflow
+├── .github/workflows/                # 🔄 CI/CD Pipeline
+│   └── build-and-deploy.yml          # GitHub Actions workflow
 │
-├── terraform/                        # 🏗️ Infrastructure as Code
-│   └── ecr/                          # ECR Repository Definitions
-│       ├── main.tf                   # 5 ECR repositories
-│       ├── variables.tf              # Configuration variables
-│       ├── outputs.tf                # Repository URLs output
-│       └── terraform.tfvars          # Environment values
-│
-├── helm-chart/                       # 📋 Original Helm Chart (Phase 4)
+├── helm-chart/                       # 📋 Helm Chart (Phase 4)
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/
 │
 ├── docs/                             # 📚 Documentation
-│   ├── environment-configurations.md
-│   ├── repository-structure-and-deployment-flow.md
-│   └── reflections.md
 │
-├── ─────────────────────────────────  # 🛠️ Infrastructure Scripts
-├── 01-infrastructure.sh              # Create AWS resources (EC2, SG, IAM)
-├── 02-k8s-init.sh                    # Initialize Kubernetes cluster
-├── 03-Install-terraform.sh           # Install Terraform locally
-├── 04-ecr-setup.sh                   # Setup ECR (Terraform) + imagePullSecret
-├── 05-dynamodb-setup.sh              # Create DynamoDB table
-├── 06-install-helm-local.sh          # Install Helm locally
-├── 07-helm-deploy.sh                 # Deploy with Helm (pre-ArgoCD)
-├── 08-create-gitops-repo.sh          # Create GitOps repository
-├── 09-argocd-setup.sh                # Install and configure ArgoCD
-│
-├── ─────────────────────────────────  # 🔧 Utility Scripts
+├── 00-prerequisites.sh               # Check/install tools
+├── 01-terraform-init.sh              # Bootstrap S3 backend
+├── 02-terraform-apply.sh             # Create all infrastructure
+├── 03-k8s-init.sh                    # Setup K8s + ECR Credential Helper
+├── 04-helm-deploy.sh                 # Deploy with Helm (Phase 4)
+├── 05-create-gitops-repo.sh          # Create GitOps repository
+├── 06-argocd-setup.sh                # Install ArgoCD (Phase 5)
 ├── startup.sh                        # Start EC2s, update IPs
-├── restore-vars.sh                   # Restore environment variables
+├── restore-vars.sh                   # Load environment variables
 ├── Display-App-URLs.sh               # Show application URLs
-├── 99-cleanup.sh                     # Delete all resources
+├── 99-cleanup.sh                     # Destroy all resources
 │
-├── ─────────────────────────────────  # 📄 Generated Files
-├── deployment-info.txt               # Environment variables (gitignored)
-├── k8s-kubeadm-key.pem              # SSH key (gitignored)
-│
-├── ─────────────────────────────────  # 📖 Documentation
-├── README.md                         # Project instructions
-├── project-cheatsheet.md             # Complete reference guide
-└── .gitignore
+└── deployment-info.txt               # Generated by Terraform (gitignored)
 ```
-
-### Key Components:
-
-| Directory/File | Purpose |
-|----------------|---------|
-| `src/` | Microservices source code |
-| `.github/workflows/` | CI/CD pipeline definitions |
-| `terraform/ecr/` | Terraform IaC for ECR repositories |
-| `*.sh` scripts | Infrastructure automation |
-| `helm-chart/` | Original Helm chart (used before ArgoCD) |
-| `docs/` | Project documentation |
 
 ---
 
 ## Repository 2: GitOps Repository
 
-**URL:** `https://github.com/<username>/retail-store-gitops`
+**URL:** `https://github.com/HaddarD/gitops-retail-store-app`
 
 **Purpose:** Single source of truth for Kubernetes deployments.
 
 ### Structure:
 ```
-retail-store-gitops/
+gitops-retail-store-app/
 │
 ├── apps/                             # 📦 Helm Charts per Service
 │   ├── ui/
 │   │   ├── Chart.yaml
 │   │   ├── values.yaml               # ← Image tags updated by CI/CD
 │   │   └── templates/
-│   │       ├── deployment.yaml
-│   │       ├── service.yaml
-│   │       └── _helpers.tpl
+│   │       ├── deployment.yaml       # No imagePullSecrets!
+│   │       └── service.yaml
 │   │
 │   ├── catalog/
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/
-│   │
 │   ├── cart/
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/
-│   │
 │   ├── orders/
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/
-│   │
 │   ├── checkout/
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/
-│   │
 │   └── dependencies/                 # PostgreSQL, Redis, RabbitMQ
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
 │
 ├── argocd/                           # 🚀 ArgoCD Application Definitions
 │   └── applications/
@@ -162,41 +102,7 @@ retail-store-gitops/
 └── README.md
 ```
 
-### How Values Files Work:
-
-Each service's `values.yaml` contains:
-```yaml
-# Example: apps/ui/values.yaml
-
-replicaCount: 1
-
-image:
-  repository: 630019796862.dkr.ecr.us-east-1.amazonaws.com/retail-store-ui
-  tag: "c4ec36469ad95d3eee5a3999108f4839f84d8108"  # ← Updated by GitHub Actions
-  pullPolicy: Always
-
-imagePullSecrets:
-  - name: regcred
-
-service:
-  type: ClusterIP
-  port: 80
-  targetPort: 8080
-
-resources:
-  requests:
-    memory: "512Mi"
-    cpu: "250m"
-  limits:
-    memory: "512Mi"
-    cpu: "500m"
-
-env:
-  ENDPOINTS_CATALOG: "http://catalog:80"
-  ENDPOINTS_CARTS: "http://cart:80"
-  ENDPOINTS_ORDERS: "http://orders:80"
-  ENDPOINTS_CHECKOUT: "http://checkout:80"
-```
+**Key Feature:** No `imagePullSecrets` - uses ECR Credential Helper with IAM role!
 
 ---
 
@@ -204,129 +110,88 @@ env:
 
 ### Complete CI/CD Pipeline:
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           DEPLOYMENT FLOW                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-     DEVELOPER                    GITHUB                         AWS/K8S
-         │                           │                              │
-    1. Push Code                     │                              │
-         │                           │                              │
-         ├──────────────────────────▶│                              │
-         │                           │                              │
-         │                    2. GitHub Actions                     │
-         │                      Triggered                           │
-         │                           │                              │
-         │                    3. Build Docker                       │
-         │                       Images                             │
-         │                           │                              │
-         │                           ├─────────────────────────────▶│
-         │                           │     4. Push to ECR           │
-         │                           │                              │
-         │                    5. Clone GitOps                       │
-         │                       Repository                         │
-         │                           │                              │
-         │                    6. Update image                       │
-         │                       tags in                            │
-         │                       values.yaml                        │
-         │                           │                              │
-         │                    7. Push to GitOps                     │
-         │                       Repository                         │
-         │                           │                              │
-         │                           │                              │
-         │                           │      8. ArgoCD detects       │
-         │                           │         changes              │
-         │                           │                              │
-         │                           │                              │
-         │                           │◀─────────────────────────────┤
-         │                           │      9. ArgoCD syncs         │
-         │                           │         to cluster           │
-         │                           │                              │
-         │                           │                              │
-         │                           ├─────────────────────────────▶│
-         │                           │     10. New pods             │
-         │                           │         deployed             │
-         │                           │                              │
-         │                           │                              │
-    11. User sees                    │                              │
-        updated app                  │                              │
-         │                           │                              │
+     DEVELOPER              GITHUB ACTIONS           AWS/KUBERNETES
+         │                        │                        │
+    1. Push Code                 │                        │
+         │                        │                        │
+         ├───────────────────────▶│                        │
+         │                        │                        │
+         │                 2. Trigger Workflow             │
+         │                        │                        │
+         │                 3. Build Images                 │
+         │                        │                        │
+         │                        ├───────────────────────▶│
+         │                        │   4. Push to ECR       │
+         │                        │                        │
+         │                 5. Clone GitOps                 │
+         │                    Repo (if exists)             │
+         │                        │                        │
+         │                 6. Update image tags            │
+         │                        │                        │
+         │                 7. Push to GitOps               │
+         │                        │                        │
+         │                        │                        │
+         │                        │   8. ArgoCD watches    │
+         │                        │      GitOps repo       │
+         │                        │                        │
+         │                        │◀───────────────────────│
+         │                        │   9. ArgoCD syncs      │
+         │                        │                        │
+         │                        │                        │
+         │                        ├───────────────────────▶│
+         │                        │  10. Pull images       │
+         │                        │      from ECR          │
+         │                        │      (IAM role auth)   │
+         │                        │                        │
+         │                        │  11. Deploy new pods   │
+         │                        │                        │
+    12. User sees                 │                        │
+        updated app               │                        │
 ```
-
-### Step-by-Step Breakdown:
-
-1. **Developer pushes code** to `retail-store-sample-app` repository
-2. **GitHub Actions workflow** is triggered by push to `main` branch
-3. **Docker images are built** for each changed microservice
-4. **Images are pushed to ECR** (created via Terraform)
-5. **GitHub Actions clones** the GitOps repository
-6. **Image tags are updated** in the appropriate `values.yaml` files
-7. **Changes are committed and pushed** to the GitOps repository
-8. **ArgoCD detects** the change in the GitOps repository
-9. **ArgoCD syncs** the new configuration to the Kubernetes cluster
-10. **New pods are deployed** with the updated images
-11. **User sees the updated application**
 
 ---
 
-## Infrastructure Provisioning
-
-### Terraform for ECR (Phase 3)
-
-ECR repositories are created using Terraform for Infrastructure as Code:
-```
-terraform/ecr/
-├── main.tf           # Defines 5 ECR repositories
-├── variables.tf      # Input variables (region, naming)
-├── outputs.tf        # Outputs repository URLs
-└── terraform.tfvars  # Your environment values
-```
+## Terraform Infrastructure Provisioning
 
 **What Terraform Creates:**
-- `retail-store-ui` repository
-- `retail-store-catalog` repository
-- `retail-store-cart` repository
-- `retail-store-orders` repository
-- `retail-store-checkout` repository
+- VPC, subnet, internet gateway, route table
+- Security group (all Kubernetes ports)
+- IAM role with ECR + DynamoDB policies
+- Instance profile
+- 3 EC2 instances (t3.medium, 20GB volumes)
+- 5 ECR repositories (with lifecycle policies)
+- DynamoDB table (for cart service)
+- SSH key pair in AWS
 
-**Features:**
-- Image scanning on push (security)
-- AES256 encryption
-- Lifecycle policies (auto-cleanup old images)
-- Proper tagging for management
+**Stored in S3 Backend:**
+- Bucket: `haddar-k8s-terraform-state`
+- DynamoDB lock: `terraform-state-lock`
+- Versioning enabled for rollback
 
 **Usage:**
 ```bash
-# First time: Creates ECR repos with Terraform + imagePullSecret
-./04-ecr-setup.sh
-
-# Subsequent runs: Only refreshes imagePullSecret (12-hour token)
-./04-ecr-setup.sh
+./01-terraform-init.sh     # Bootstrap S3 backend
+./02-terraform-apply.sh    # Create everything
+terraform show             # View current state
+terraform output           # See all outputs
 ```
 
 ---
 
-## Rollback Procedure
+## ECR Credential Helper (No Token Expiration!)
 
-### Option 1: Git Revert
-```bash
-# In GitOps repository
-git revert HEAD
-git push
-# ArgoCD auto-syncs to previous version
-```
+**How it works:**
+1. `amazon-ecr-credential-helper` installed on all 3 EC2 nodes
+2. `containerd` configured to use credential helper
+3. Helper uses EC2 IAM role for authentication
+4. No Kubernetes secrets needed
+5. No 12-hour token expiration
 
-### Option 2: ArgoCD UI
-1. Open ArgoCD UI
-2. Select application
-3. Click "History and Rollback"
-4. Select previous revision
-5. Click "Rollback"
-
-### Option 3: ArgoCD CLI
-```bash
-argocd app rollback retail-store-ui
-```
+**Benefits:**
+- ✅ Zero maintenance
+- ✅ Works after EC2 downtime
+- ✅ No `imagePullSecrets` in manifests
+- ✅ AWS best practice
 
 ---
 
@@ -353,18 +218,24 @@ retail-store-dependencies   Synced        Healthy
 kubectl get pods -n retail-store
 ```
 
-### Expected Output:
+---
+
+## Rollback Procedure
+
+### Option 1: Git Revert (Recommended)
+```bash
+cd gitops-retail-store-app
+git revert HEAD
+git push
+# ArgoCD auto-syncs to previous version
 ```
-NAME                          READY   STATUS    RESTARTS   AGE
-ui-xxxxx                      1/1     Running   0          5m
-catalog-xxxxx                 1/1     Running   0          5m
-cart-xxxxx                    1/1     Running   0          5m
-orders-xxxxx                  1/1     Running   0          5m
-checkout-xxxxx                1/1     Running   0          5m
-postgresql-xxxxx              1/1     Running   0          5m
-redis-master-xxxxx            1/1     Running   0          5m
-rabbitmq-xxxxx                1/1     Running   0          5m
-```
+
+### Option 2: ArgoCD UI
+1. Open ArgoCD dashboard
+2. Select application
+3. Click "History and Rollback"
+4. Choose previous revision
+5. Click "Rollback"
 
 ---
 
@@ -372,12 +243,12 @@ rabbitmq-xxxxx                1/1     Running   0          5m
 
 | Aspect | Implementation |
 |--------|----------------|
+| Infrastructure | Complete Terraform IaC |
 | Source Code | Application Repository |
 | Configurations | GitOps Repository |
-| IaC (ECR) | Terraform |
+| ECR Authentication | Credential Helper (IAM role) |
 | CI | GitHub Actions |
 | CD | ArgoCD |
 | Container Registry | AWS ECR |
 | Kubernetes | kubeadm on EC2 |
 | Ingress | nginx-ingress (NodePort) |
-| Databases | PostgreSQL, Redis, RabbitMQ (in-cluster) + DynamoDB (AWS) |

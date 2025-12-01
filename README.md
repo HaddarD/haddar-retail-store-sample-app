@@ -1,16 +1,16 @@
-# Retail Store Sample App - Kubernetes kubeadm Cluster 🛒
+# Haddar's Retail Store - Kubernetes kubeadm Cluster 🛒
 
-A microservices e-commerce application deployed on a self-managed Kubernetes cluster using kubeadm, with GitOps continuous deployment via ArgoCD.
+A microservices e-commerce application deployed on a self-managed Kubernetes cluster using kubeadm, with complete infrastructure automation via Terraform and GitOps continuous deployment via ArgoCD.
 
 ## Features
 
-- 🏗️ **Self-managed Kubernetes** cluster using kubeadm (not EKS)
+- 🏗️ **Complete Infrastructure as Code** - Terraform provisions ALL AWS resources
+- 🏛️ **Self-managed Kubernetes** cluster using kubeadm (not EKS)
 - 🐳 **5 Microservices**: UI, Catalog, Cart, Orders, Checkout
-- 📦 **AWS ECR** for private container registry
+- 📦 **AWS ECR** with automatic authentication (no token expiration!)
 - 🔄 **GitHub Actions CI/CD** pipeline
 - 🚀 **ArgoCD GitOps** for automated deployments
-- 🏭 **Terraform** for ECR infrastructure provisioning
-- 📊 **Infrastructure as Code** with automated bash scripts
+- 📊 **Automated bash scripts** for daily operations
 
 ## Architecture
 ```
@@ -34,7 +34,7 @@ A microservices e-commerce application deployed on a self-managed Kubernetes clu
 │                                                                  │
 │   ┌──────────┐    ┌──────────┐    ┌──────────┐                 │
 │   │   ECR    │    │  ArgoCD  │    │Terraform │                 │
-│   │(registry)│    │ (GitOps) │    │  (IaC)   │                 │
+│   │(registry)│    │ (GitOps) │    │   (ALL)  │                 │
 │   └──────────┘    └──────────┘    └──────────┘                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -42,64 +42,81 @@ A microservices e-commerce application deployed on a self-managed Kubernetes clu
 ## Prerequisites
 
 - AWS CLI configured with appropriate permissions
-- GitHub account with repository fork
+- GitHub account with repository access
 - Bash terminal (Linux/macOS/WSL)
-- ~$2-5/day AWS costs (3x t3.medium EC2 instances)
+- ~$3-6/day AWS costs (3x t3.medium EC2 instances)
 
 ## Quick Start 🚀
 
 ### First Time Setup
 ```bash
 # 1. Clone the repository
-git clone https://github.com/YOUR-USERNAME/retail-store-sample-app.git
-cd retail-store-sample-app
+git clone https://github.com/HaddarD/haddar-retail-store-sample-app.git
+cd haddar-retail-store-sample-app
 
-# 2. Create AWS infrastructure (EC2 instances, security groups, IAM)
-./01-infrastructure.sh
+# 2. Check/install prerequisites (Terraform, Helm, kubectl, etc.)
+./00-prerequisites.sh
 
-# 3. Initialize Kubernetes cluster
-./02-k8s-init.sh
+# 3. Generate SSH key for EC2 instances
+ssh-keygen -t rsa -b 4096 -f haddar-k8s-kubeadm-key -N ""
 
-# 4. Install Terraform (one time)
-./03-Install-terraform.sh
+# 4. Bootstrap Terraform backend (S3 + DynamoDB)
+./01-terraform-init.sh
 
-# 5. Setup ECR repositories (Terraform) and credentials
-./04-ecr-setup.sh
+# 5. Create ALL infrastructure (VPC, EC2, ECR, DynamoDB, IAM)
+./02-terraform-apply.sh
 
-# 6. Create DynamoDB table for Cart service
-./05-dynamodb-setup.sh
+# 6. Load environment variables
+source restore-vars.sh
 
-# 7. Install Helm locally
-./06-install-helm-local.sh
+# 7. Initialize Kubernetes cluster + ECR authentication
+./03-k8s-init.sh
 
-# 8. (Option A) Deploy with Helm only
-./07-helm-deploy.sh
+# 8. Push your code to GitHub (needed for ArgoCD later)
+git add .
+git commit -m "Initial setup"
+git push origin main
 
-# 8. (Option B) Deploy with GitOps/ArgoCD
-./08-create-gitops-repo.sh
+# 9. Deploy with Helm (Phase 4 demonstration)
+./04-helm-deploy.sh
+
+# 10. Create GitOps repository (Phase 5)
+./05-create-gitops-repo.sh
 # Add GITOPS_PAT secret to GitHub repository settings
-./09-argocd-setup.sh
+
+# 11. Install ArgoCD (takes over from Helm)
+./06-argocd-setup.sh
 ```
 
 ### Daily Startup
 ```bash
-./startup.sh && source restore-vars.sh && ./04-ecr-setup.sh
+./startup.sh && source restore-vars.sh
 ```
 
 ### Access the Application
 ```bash
-# Retail Store App
-echo "http://${MASTER_PUBLIC_IP}:30080"
+./Display-App-URLs.sh
 
-# ArgoCD UI (if using GitOps)
-echo "https://${MASTER_PUBLIC_IP}:30090"
-# Username: admin
-# Password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+# Or manually:
+# Retail Store: http://<MASTER_IP>:30080
+# ArgoCD UI: https://<MASTER_IP>:30090
 ```
 
 ## Project Structure
 ```
-retail-store-sample-app/
+haddar-retail-store-sample-app/
+├── terraform/                    # 🏗️ Complete Infrastructure as Code
+│   ├── main.tf                   # Provider, backend, data sources
+│   ├── variables.tf              # Input variables
+│   ├── outputs.tf                # Exported values
+│   ├── terraform.tfvars          # Configuration values
+│   ├── vpc.tf                    # VPC, subnets, IGW, routes
+│   ├── security-groups.tf        # Kubernetes security groups
+│   ├── iam.tf                    # IAM roles and policies
+│   ├── ec2.tf                    # 3 EC2 instances
+│   ├── ecr.tf                    # 5 ECR repositories
+│   └── dynamodb.tf               # DynamoDB table
+│
 ├── src/                          # Microservices source code
 │   ├── ui/                       # Java Spring Boot frontend
 │   ├── catalog/                  # Go REST API
@@ -107,55 +124,40 @@ retail-store-sample-app/
 │   ├── orders/                   # Java Spring Boot
 │   └── checkout/                 # Node.js
 │
-├── .github/workflows/            # CI/CD pipeline
-│   └── build-and-deploy.yml
-│
-├── terraform/                    # Infrastructure as Code
-│   └── ecr/                      # ECR repository definitions
-│       ├── main.tf
-│       ├── variables.tf
-│       ├── outputs.tf
-│       └── terraform.tfvars
-│
 ├── helm-chart/                   # Kubernetes Helm chart
-│
+├── .github/workflows/            # CI/CD pipeline
 ├── docs/                         # Documentation
-│   ├── environment-configurations.md
-│   ├── repository-structure-and-deployment-flow.md
-│   └── reflections.md
 │
-├── 01-infrastructure.sh          # Create AWS resources
-├── 02-k8s-init.sh                # Initialize K8s cluster
-├── 03-Install-terraform.sh       # Install Terraform
-├── 04-ecr-setup.sh               # Setup ECR (Terraform) + credentials
-├── 05-dynamodb-setup.sh          # Create DynamoDB table
-├── 06-install-helm-local.sh      # Install Helm locally
-├── 07-helm-deploy.sh             # Deploy with Helm
-├── 08-create-gitops-repo.sh      # Create GitOps repository
-├── 09-argocd-setup.sh            # Install ArgoCD
+├── 00-prerequisites.sh           # Check/install tools
+├── 01-terraform-init.sh          # Bootstrap Terraform
+├── 02-terraform-apply.sh         # Create infrastructure
+├── 03-k8s-init.sh                # Setup Kubernetes + ECR auth
+├── 04-helm-deploy.sh             # Deploy with Helm
+├── 05-create-gitops-repo.sh      # Create GitOps repo
+├── 06-argocd-setup.sh            # Install ArgoCD
 ├── startup.sh                    # Daily startup script
-├── 99-cleanup.sh                 # Delete all resources
+├── restore-vars.sh               # Load variables
+├── Display-App-URLs.sh           # Show URLs
+├── 99-cleanup.sh                 # Destroy everything
 │
-├── deployment-info.txt           # Generated variables (gitignored)
-├── project-cheatsheet.md         # Complete reference guide
-└── README.md                     # This file
+└── deployment-info.txt           # Generated variables
 ```
 
 ## Scripts Reference
 
-| Script | Purpose | Run Frequency |
-|--------|---------|---------------|
-| `01-infrastructure.sh` | Create EC2, security groups, IAM | Once |
-| `02-k8s-init.sh` | Initialize Kubernetes cluster | Once |
-| `03-Install-terraform.sh` | Install Terraform locally | Once |
-| `04-ecr-setup.sh` | Setup ECR (Terraform) + refresh credentials | Once + Every session |
-| `05-dynamodb-setup.sh` | Create DynamoDB table | Once |
-| `06-install-helm-local.sh` | Install Helm locally | Once |
-| `07-helm-deploy.sh` | Deploy app with Helm | Once (if not using ArgoCD) |
-| `08-create-gitops-repo.sh` | Create GitOps repository | Once |
-| `09-argocd-setup.sh` | Install and configure ArgoCD | Once |
+| Script | Purpose | When to Run |
+|--------|---------|-------------|
+| `00-prerequisites.sh` | Install tools (Terraform, Helm, etc.) | Once |
+| `01-terraform-init.sh` | Bootstrap S3 backend for Terraform | Once |
+| `02-terraform-apply.sh` | Create ALL AWS infrastructure | Once |
+| `03-k8s-init.sh` | Initialize K8s + ECR Credential Helper | Once |
+| `04-helm-deploy.sh` | Deploy app with Helm (Phase 4) | Once |
+| `05-create-gitops-repo.sh` | Create GitOps repository | Once |
+| `06-argocd-setup.sh` | Install ArgoCD (Phase 5) | Once |
 | `startup.sh` | Start EC2s, update IPs | Every session |
-| `99-cleanup.sh` | Delete ALL resources | End of project |
+| `restore-vars.sh` | Load environment variables | Every session |
+| `Display-App-URLs.sh` | Show application URLs | Anytime |
+| `99-cleanup.sh` | Destroy ALL resources | End of project |
 
 ## GitHub Secrets Required
 
@@ -165,9 +167,20 @@ Add these to your GitHub repository settings → Secrets and variables → Actio
 |--------|-------------|
 | `AWS_ACCESS_KEY_ID` | AWS access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key |
-| `AWS_REGION` | `us-east-1` |
-| `AWS_ACCOUNT_ID` | Your AWS account ID |
-| `GITOPS_PAT` | GitHub PAT for GitOps repo (if using ArgoCD) |
+| `GITOPS_PAT` | GitHub Personal Access Token (for GitOps repo) |
+
+## What's New: Terraform + ECR Credential Helper
+
+**Complete Terraform Infrastructure:**
+- Everything is now created via Terraform (VPC, EC2, ECR, DynamoDB, IAM)
+- Stored in S3 backend with DynamoDB locking
+- One command to create, one command to destroy
+
+**ECR Credential Helper (No More Token Expiration!):**
+- Uses EC2 IAM role for authentication
+- No imagePullSecrets needed
+- No 12-hour token refresh required
+- Images pull automatically from ECR
 
 ## Useful Commands
 ```bash
@@ -178,81 +191,67 @@ kubectl get pods -n retail-store
 # Check ArgoCD applications
 kubectl get applications -n argocd
 
-# View logs
+# View application logs
 kubectl logs -n retail-store -l app=ui --tail=50
 
-# Restart deployments (after ECR token refresh)
-kubectl rollout restart deployment -n retail-store
-
 # SSH to master node
-ssh -i $KEY_FILE ubuntu@$MASTER_PUBLIC_IP
+ssh -i haddar-k8s-kubeadm-key ubuntu@$MASTER_PUBLIC_IP
 
-# Check Terraform state
-cd terraform/ecr && terraform show
+# Terraform commands
+cd terraform
+terraform plan        # Show what would change
+terraform show        # Show current state
+terraform output      # Show all outputs
 ```
 
 ## Troubleshooting
 
 ### Pods stuck in ImagePullBackOff
-ECR credentials expired or missing. Run:
+ECR Credential Helper should handle this automatically. If issues persist:
 ```bash
-./04-ecr-setup.sh
+# Check IAM role is attached
+aws ec2 describe-instances --instance-ids $MASTER_INSTANCE_ID \
+  --query 'Reservations[0].Instances[0].IamInstanceProfile'
+
+# Verify credential helper is installed
+ssh -i haddar-k8s-kubeadm-key ubuntu@$MASTER_PUBLIC_IP \
+  "docker-credential-ecr-login -v"
 ```
-*(Script automatically refreshes credentials and restarts deployments)*
 
 ### Cannot connect to cluster
-EC2 instances stopped or IPs changed. Run:
 ```bash
 ./startup.sh && source restore-vars.sh
 ```
 
-### 503 Service Unavailable
-Backend pods not ready yet. Check pod status:
+### Terraform state issues
 ```bash
-kubectl get pods -n retail-store
-```
-
-### RabbitMQ won't install
-Requires 20GB disk space. Check with:
-```bash
-ssh -i $KEY_FILE ubuntu@$MASTER_PUBLIC_IP "df -h /"
-```
-
-### Terraform errors
-Terraform not installed or initialized:
-```bash
-./03-Install-terraform.sh
-cd terraform/ecr && terraform init
+cd terraform
+terraform init -reconfigure
 ```
 
 ## Cleanup
 
-**⚠️ This deletes ALL resources and cannot be undone!**
+**⚠️ This deletes ALL resources!**
 ```bash
 ./99-cleanup.sh
 ```
 
 ## Technologies Used
 
-| Category | Technology |
-|----------|------------|
-| Cloud | AWS (EC2, ECR, DynamoDB) |
-| IaC | Terraform (ECR provisioning) |
-| Container Runtime | containerd |
-| Kubernetes | kubeadm 1.28 |
-| CNI | Calico |
-| Package Manager | Helm |
-| GitOps | ArgoCD |
-| CI/CD | GitHub Actions |
-| Ingress | nginx-ingress |
+- **Cloud:** AWS (EC2, VPC, ECR, DynamoDB, S3, IAM)
+- **IaC:** Terraform (complete infrastructure)
+- **Container Runtime:** containerd + ECR Credential Helper
+- **Kubernetes:** kubeadm 1.28, Calico CNI
+- **Package Manager:** Helm
+- **GitOps:** ArgoCD
+- **CI/CD:** GitHub Actions
 
 ## Documentation
 
-- [Project Cheatsheet](project-cheatsheet.md) - Complete reference for presentation
-- [Environment Configurations](docs/environment-configurations.md) - Multi-environment strategy
-- [Repository Structure & Deployment Flow](docs/repository-structure-and-deployment-flow.md) - Detailed architecture
-- [Reflections](docs/reflections.md) - Challenges and learnings
+- [Environment Configurations](docs/environment-configurations.md)
+- [Repository Structure & Deployment Flow](docs/repository-structure-and-deployment-flow.md)
+- [Reflections](docs/reflections.md)
 
 ---
 
-*Built as a DevOps class project demonstrating Kubernetes, CI/CD, and GitOps principles* 🎓
+*DevOps project demonstrating Terraform IaC, Kubernetes, CI/CD, and GitOps* 🎓

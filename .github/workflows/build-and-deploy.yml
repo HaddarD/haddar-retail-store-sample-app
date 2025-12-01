@@ -9,7 +9,7 @@ on:
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-  GITOPS_REPO: retail-store-gitops
+  GITOPS_REPO: gitops-retail-store-app
 
 jobs:
   # Job to detect which services changed
@@ -56,7 +56,7 @@ jobs:
 
       - name: Build, tag, and push UI image
         env:
-          ECR_REPOSITORY: retail-store-ui
+          ECR_REPOSITORY: haddar-retail-store-ui
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "Building UI service..."
@@ -95,7 +95,7 @@ jobs:
 
       - name: Build, tag, and push Catalog image
         env:
-          ECR_REPOSITORY: retail-store-catalog
+          ECR_REPOSITORY: haddar-retail-store-catalog
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "Building Catalog service..."
@@ -134,7 +134,7 @@ jobs:
 
       - name: Build, tag, and push Cart image
         env:
-          ECR_REPOSITORY: retail-store-cart
+          ECR_REPOSITORY: haddar-retail-store-cart
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "Building Cart service..."
@@ -173,7 +173,7 @@ jobs:
 
       - name: Build, tag, and push Orders image
         env:
-          ECR_REPOSITORY: retail-store-orders
+          ECR_REPOSITORY: haddar-retail-store-orders
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "Building Orders service..."
@@ -212,7 +212,7 @@ jobs:
 
       - name: Build, tag, and push Checkout image
         env:
-          ECR_REPOSITORY: retail-store-checkout
+          ECR_REPOSITORY: haddar-retail-store-checkout
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "Building Checkout service..."

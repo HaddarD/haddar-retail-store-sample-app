@@ -38,7 +38,7 @@ Lesson learned: when something times out, **check resources first** before addin
 
 ---
 
-### 💀 The Great Snapshot Catastrophe of November 24th 2025 💀
+## 💀 The Great Snapshot Catastrophe of November 24th 2025 💀
 
 So there I was, 1 AM, project **DONE**, feeling great... and then:
 
@@ -48,11 +48,11 @@ So there I was, 1 AM, project **DONE**, feeling great... and then:
 4. Broke the entire VirtualBox disk chain - ubuntu won't boot 💀
 5. Computer kept restarting because - ***my cat was sitting on the power button!*** 😸🤯🤦‍♀️
 6. Ran Recuva & many other softwares at 2 AM hoping for data recovery - no luck 😫
-7. Spend the next 2 days attempting to restore what I can from the remaining snapshots 😵
+7. Spent the next 2 days attempting to restore what I can from the remaining snapshots 😵
 8. Eventually Re-installed a new Ubuntu: 😔
    * Reinstalled AWS CLI, git & gitcli, helm, kubectl, and everything else needed...
    * Reconfigured AWS CLI, Git SSH cli, kubectl access and everything else needed...
-   * created a new keypair for EC2 and manually added it to the EC2 instances
+   * Created a new keypair for EC2 and manually added it to the EC2 instances
    * Cloned this repo - Thank God I pushed it a few minutes before the crash 🤗
    * Had to recreate local file - deployment-info.txt - too many missing variables had to be recovered 🪫
    * Had to restore and reconfigure kubectl as well. 😞
@@ -64,6 +64,67 @@ So there I was, 1 AM, project **DONE**, feeling great... and then:
 - SSD hard drive is unrecoverable... 😖
 - ***Creating scripts is a HUGE time saver when having to restore everything!*** 📝🤓
 - I learned a lot of snapshots manipulation tricks, I created a partial chain of the most current snapshots, separated them from the missing links, and attached them to the base, & attached them to my new VM using USB to try and recover as many files as I can... 🛠️💡🧩
+
+---
+
+## The Terraform Migration Experience 🏗️
+
+**Teacher feedback:** "Everything must be Terraform, not just ECR!"
+
+Initially had AWS CLI scripts creating infrastructure. Had to migrate everything to Terraform. Big change, but worth it:
+
+**What changed:**
+- VPC, subnets, security groups → Terraform
+- IAM roles, instance profiles → Terraform
+- EC2 instances → Terraform
+- ECR repositories → Terraform (was already done)
+- DynamoDB table → Terraform
+
+**Benefits:**
+- One command to create: `./02-terraform-apply.sh`
+- One command to destroy: `./99-cleanup.sh`
+- State stored in S3 with locking
+- Easy to recreate exact environment
+- Infrastructure documented as code
+
+**Challenges:**
+- Learning Terraform syntax
+- Organizing into multiple `.tf` files
+- Getting outputs to work with bash scripts
+- S3 backend bootstrap (chicken-and-egg problem)
+
+**Solution:** Created `01-terraform-init.sh` to bootstrap the S3 bucket first, then switch to S3 backend.
+
+Lesson: IaC makes complex infrastructure reproducible! 🎯
+
+---
+
+## ECR Credential Helper vs Token Refresh 🔐
+
+**Original approach:** Manually refresh ECR tokens every 12 hours.
+```bash
+# Had to run this constantly
+./04-ecr-setup.sh
+kubectl rollout restart deployment -n retail-store
+```
+
+**Problem:** After stopping EC2 instances for a week, tokens expired and everything broke.
+
+**Teacher recommendation:** Use ECR Credential Helper (Option B).
+
+**New approach:**
+- Install `amazon-ecr-credential-helper` on all nodes
+- Configure `containerd` to use it
+- Uses EC2 IAM role automatically
+- No tokens, no secrets, no expiration!
+
+**Result:**
+- ✅ No more `imagePullSecrets` in manifests
+- ✅ No more token refresh scripts
+- ✅ Works after EC2 downtime
+- ✅ Zero maintenance
+
+Best decision ever! Why didn't I do this from the start? 😅
 
 ---
 
@@ -98,29 +159,39 @@ No more manual `helm upgrade` commands. Just `git push` and grab coffee. ☕
 
 ## What I Learned 🎓
 
+### Terraform is Powerful 💪
+Infrastructure as Code means I can destroy and recreate the entire environment in 15 minutes. No more manual clicking in AWS Console!
+
 ### GitOps is Pretty Cool 😎
 The idea is simple: **Git = single source of truth**. You don't manually deploy anything. You push to Git, ArgoCD watches, and automatically syncs the cluster. If someone manually changes something in the cluster? ArgoCD reverts it. Magic! ✨
 
-### Claude Projects with Multiple Chats 🤖
-This was my first time using Claude with a project knowledge base across multiple chat sessions. Each phase got its own chat, but they all shared context. It felt like having a teammate who actually remembers what we did last week! Pretty fun workflow.
+### ECR Credential Helper is Underrated 🔐
+No more worrying about token expiration. IAM role handles everything automatically. Should be the default approach!
 
 ### Automation is Life 🤩
 I ended up with scripts for everything:
 - `startup.sh` → Start EC2s, update IPs automatically
-- `03-ecr-setup.sh` → Refresh ECR credentials (they expire every 12 hours!)
+- `restore-vars.sh` → Load all environment variables
 - `99-cleanup.sh` → Nuke everything when done
 
-Daily startup went from 6 commands to just:
+Daily startup went from 6+ commands to just:
 ```bash
-./startup.sh && source deployment-info.txt && ./03-ecr-setup.sh
+./startup.sh && source restore-vars.sh
 ```
 
 ---
 
 ## Final Thoughts 💡
 
-Complex project, but honestly? I enjoyed it. Building a full CI/CD pipeline with GitHub Actions pushing to ECR, ArgoCD watching a GitOps repo, and seeing changes auto-deploy to a kubeadm cluster I built from scratch... that's satisfying. 
+Complex project, but honestly? I enjoyed it. Building a full CI/CD pipeline with:
+- Complete Terraform infrastructure
+- GitHub Actions building and pushing to ECR
+- ECR Credential Helper eliminating token headaches
+- ArgoCD watching a GitOps repo
+- Seeing changes auto-deploy to a kubeadm cluster I built from scratch
 
-Would I do it again? Maybe with 20GB disks from the start next time. 😅
+...that's satisfying. 
+
+Would I do it again? Yes, but with 20GB disks and the cat locked out from day one. 😅
 
 ## It's been a fun ride! <(^-^<) <(^.^)> (>^-^)>

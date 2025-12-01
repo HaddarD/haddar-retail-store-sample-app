@@ -1,115 +1,14 @@
-# Kubernetes kubeadm Cluster Project - Requirements
-# Tools needed on your LOCAL machine (not on EC2 instances)
+# Python Requirements (if needed for any scripts)
+# Currently not required - all scripts are bash
 
-## Required Tools:
+# Future enhancements could include:
+# - Python automation scripts
+# - AWS SDK (boto3) for advanced operations
+# - Kubernetes Python client
 
-1. AWS CLI (version 2.x)
-   - Purpose: Managing AWS resources
-   - Installation: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
-   - Verify: aws --version
-   - Configure: aws configure
-
-2. jq (recommended but optional)
-   - Purpose: JSON parsing for better output
-   - Installation (Ubuntu/Debian): sudo apt-get install jq
-   - Installation (Mac): brew install jq
-   - Verify: jq --version
-
-3. SSH Client
-   - Purpose: Connecting to EC2 instances
-   - Pre-installed on Linux/Mac
-   - Windows: Use Git Bash, WSL, or PuTTY
-
-4. Git (recommended)
-   - Purpose: Version control for your project
-   - Installation: https://git-scm.com/downloads
-   - Verify: git --version
-
-## AWS Account Requirements:
-
-1. IAM Permissions needed:
-   - EC2 (create instances, security groups, key pairs)
-   - IAM (create roles and instance profiles)
-   - ECR (optional for later, but IAM role created in Phase 1)
-
-2. AWS CLI Configuration:
-   - AWS Access Key ID
-   - AWS Secret Access Key
-   - Default region: us-east-1
-   - Default output format: json
-
-## Instance Requirements (will be created by script):
-
-- 3 x t3.medium EC2 instances
-- Ubuntu 24.04 LTS AMI
-- Total vCPU: 6 (2 per instance)
-- Total Memory: 12 GB (4 GB per instance)
-- Storage: 20 GB per instance (recommended for Kubernetes + all services)
-
-## Estimated AWS Costs:
-
-- t3.medium: ~$0.0416/hour per instance
-- 3 instances: ~$0.125/hour total
-- 1 month (730 hours): ~$91
-- Recommendation: Use AWS Free Tier if eligible, or stop instances when not in use
-
-## Network Ports (configured automatically by script):
-
-Master Node:
-- 6443: Kubernetes API server
-- 2379-2380: etcd server client API
-- 10250: Kubelet API
-- 10259: kube-scheduler
-- 10257: kube-controller-manager
-
-Worker Nodes:
-- 10250: Kubelet API
-- 30000-32767: NodePort Services
-
-All Nodes:
-- 22: SSH
-- 80/443: HTTP/HTTPS (for applications)
-- CNI-specific ports (Flannel, Weave, etc.)
-
-## Quick Installation Commands:
-
-# AWS CLI (Linux/Mac)
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip
-sudo ./aws/install
-
-# jq (Ubuntu/Debian)
-sudo apt-get update
-sudo apt-get install jq -y
-
-# jq (Mac)
-brew install jq
-
-# Configure AWS CLI
-aws configure
-# Enter your AWS Access Key ID
-# Enter your AWS Secret Access Key
-# Enter region: us-east-1
-# Enter output format: json
-
-## Verify Setup:
-
-# Check AWS CLI
-aws --version
-# Expected: aws-cli/2.x.x ...
-
-# Check AWS credentials
-aws sts get-caller-identity
-# Expected: JSON with UserId, Account, Arn
-
-# Check jq (optional)
-jq --version
-# Expected: jq-1.x
-
-## Notes:
-
-- All scripts assume AWS CLI is configured
-- Scripts are idempotent (can be run multiple times safely)
-- Use deployment-info.txt to track created resources
-- Keep SSH key file (.pem) secure and never commit to git
-- Add deployment-info.txt to .gitignore
+# For now, this file serves as a placeholder
+# All dependencies are installed via package managers:
+# - apt (Ubuntu packages)
+# - Terraform (infrastructure)
+# - Helm (Kubernetes package manager)
+# - kubectl (Kubernetes CLI)

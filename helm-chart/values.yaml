@@ -11,7 +11,7 @@ ui:
   name: ui
   replicaCount: 1
   image:
-    repository: retail-store-ui
+    repository: haddar-retail-store-ui
     tag: latest
     pullPolicy: Always
   service:
@@ -40,7 +40,7 @@ catalog:
   name: catalog
   replicaCount: 1
   image:
-    repository: retail-store-catalog
+    repository: haddar-retail-store-catalog
     tag: latest
     pullPolicy: Always
   service:
@@ -69,7 +69,7 @@ cart:
   name: cart
   replicaCount: 1
   image:
-    repository: retail-store-cart
+    repository: haddar-retail-store-cart
     tag: latest
     pullPolicy: Always
   service:
@@ -96,7 +96,7 @@ orders:
   name: orders
   replicaCount: 1
   image:
-    repository: retail-store-orders
+    repository: haddar-retail-store-orders
     tag: latest
     pullPolicy: Always
   service:
@@ -125,7 +125,7 @@ checkout:
   name: checkout
   replicaCount: 1
   image:
-    repository: retail-store-checkout
+    repository: haddar-retail-store-checkout
     tag: latest
     pullPolicy: Always
   service:
@@ -151,6 +151,5 @@ checkout:
     - name: RABBITMQ_PASSWORD
       value: "guest"
 
-# Image Pull Secrets
-imagePullSecrets:
-  - name: regcred
+# Image Pull Secrets - NOT NEEDED
+# Using ECR Credential Helper (Option B) - IAM role handles authentication

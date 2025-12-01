@@ -5,6 +5,7 @@
 # ============================================
 deployment-info.txt
 *.pem
+!*.pub
 *.key
 !*.key.example
 
@@ -15,8 +16,7 @@ deployment-info.txt
 .terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
-*.tfvars
-!*.tfvars.example
+# terraform.tfvars is tracked (contains no secrets)
 
 # ============================================
 # Kubernetes
@@ -29,7 +29,7 @@ kubeconfig
 # Helm
 # ============================================
 charts/*.tgz
-*.lock
+Chart.lock
 
 # ============================================
 # Secrets and Credentials
@@ -77,41 +77,24 @@ test-outputs/
 tmp/
 temp/
 
-.DS_Store
-*.tfvars
-.terraform
-*.tfstate*
-*.lock.hcl
-*.log
-.vscode
+# ============================================
+# Node/NX
+# ============================================
+node_modules
+dist
+.venv
+.nx/cache
+.nx/workspace-data
+
+# ============================================
+# Other
+# ============================================
+screenshots
+.devenv*
+devenv.local.nix
+.direnv
+.pre-commit-config.yaml
 reports
 env
 oss-output
 kubeconfig_*
-.idea
-node_modules
-dist
-.venv
-
-ort-build
-
-Chart.lock
-**/charts/*.tgz
-
-.nx/cache
-.nx/workspace-data
-
-screenshots
-# Devenv
-.devenv*
-devenv.local.nix
-
-# direnv
-.direnv
-
-.pre-commit-config.yaml
-/terraform/eks/default/keys/*
-/terraform/eks/default/.terraform
-/terraform/eks/default/.terraform.lock.hcl
-/terraform/eks/default/.terraform.tfstate
-/terraform/eks/default/.terraform.tfstate.backup
