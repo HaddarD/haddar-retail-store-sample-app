@@ -37,3 +37,6 @@ echo "  ECR_REGISTRY:        $ECR_REGISTRY"
 echo "  DYNAMODB_TABLE_NAME: $DYNAMODB_TABLE_NAME"
 echo ""
 echo -e "${GREEN}All variables available in current shell ✓${NC}"
+
+# kubectl configuration
+export KUBECONFIG=~/.kube/config-haddar-retail-store
