@@ -72,14 +72,14 @@ echo -e "${NC}\n"
 # Check prerequisites
 check_prerequisites() {
     print_header "Checking Prerequisites"
-    
+
     # Check if SSH key exists
     if [ ! -f "$KEY_FILE" ]; then
         print_error "SSH key not found: $KEY_FILE"
         exit 1
     fi
     print_success "SSH key found"
-    
+
     # Test SSH connection to master
     print_info "Testing SSH connection to master node..."
     if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP "echo 'SSH test successful'" &>/dev/null; then
@@ -89,7 +89,7 @@ check_prerequisites() {
         print_info "Wait a few minutes after running 02-terraform-apply.sh"
         exit 1
     fi
-    
+
     print_success "All prerequisites met"
 }
 
@@ -97,28 +97,28 @@ check_prerequisites() {
 run_on_all_nodes() {
     local COMMAND=$1
     local DESCRIPTION=$2
-    
+
     print_info "$DESCRIPTION"
-    
+
     # Master
     print_info "Running on master..."
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP "$COMMAND"
-    
+
     # Worker 1
     print_info "Running on worker1..."
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$WORKER1_PUBLIC_IP "$COMMAND"
-    
+
     # Worker 2
     print_info "Running on worker2..."
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$WORKER2_PUBLIC_IP "$COMMAND"
-    
+
     print_success "$DESCRIPTION - Complete"
 }
 
 # Install Kubernetes components on all nodes
 install_kubernetes() {
     print_header "Installing Kubernetes Components on All Nodes"
-    
+
     INSTALL_SCRIPT='
 #!/bin/bash
 set -e
@@ -178,84 +178,62 @@ sudo systemctl enable kubelet
 
 echo "Kubernetes components installed successfully"
 '
-    
+
     run_on_all_nodes "$INSTALL_SCRIPT" "Installing Kubernetes on all nodes"
 }
 
-# Install ECR Credential Helper on all nodes (Option B)
+# Install ECR Credential Provider for Kubelet (Correct Approach)
 install_ecr_credential_helper() {
-    print_header "Installing ECR Credential Helper on All Nodes (Option B)"
-    
-    print_info "This eliminates the need for ECR tokens - IAM role handles authentication!"
-    
-    ECR_HELPER_SCRIPT='
+    print_header "Installing ECR Credential Provider for Kubelet"
+
+    print_info "Using Kubernetes-native ECR credential provider..."
+
+    ECR_PROVIDER_SCRIPT='
 #!/bin/bash
 set -e
 
-# Install amazon-ecr-credential-helper
-echo "Installing amazon-ecr-credential-helper..."
-sudo apt-get update
-sudo apt-get install -y amazon-ecr-credential-helper
+# Download the correct kubelet credential provider
+echo "Downloading ecr-credential-provider..."
+wget -q https://github.com/dntosas/ecr-credential-provider/releases/download/v1.0.0/ecr-credential-provider-linux-amd64
+chmod +x ecr-credential-provider-linux-amd64
+sudo mv ecr-credential-provider-linux-amd64 /usr/local/bin/ecr-credential-provider
 
-# Verify installation
-if command -v docker-credential-ecr-login &> /dev/null; then
-    echo "✅ ECR Credential Helper installed successfully"
-    docker-credential-ecr-login -v
-else
-    echo "❌ ECR Credential Helper installation failed"
-    exit 1
-fi
+echo "✅ ECR credential provider installed"
 
-# Configure containerd for ECR using modern config_path approach
-echo "Configuring containerd for ECR..."
+# Create credential provider config
+echo "Creating credential provider config..."
+sudo mkdir -p /etc/kubernetes
 
-# Enable config_path in main config (if not already set)
-if ! grep -q "config_path" /etc/containerd/config.toml; then
-    sudo sed -i "/\[plugins\.\"io\.containerd\.grpc\.v1\.cri\"\.registry\]/a\  config_path = \"/etc/containerd/certs.d\"" /etc/containerd/config.toml
-fi
+sudo tee /etc/kubernetes/ecr-credential-config.yaml > /dev/null <<EOF
+apiVersion: kubelet.config.k8s.io/v1
+kind: CredentialProviderConfig
+providers:
+- name: ecr-credential-provider
+  matchImages:
+  - "*.dkr.ecr.*.amazonaws.com"
+  - "*.dkr.ecr.*.amazonaws.com.cn"
+  - "*.dkr.ecr-fips.*.amazonaws.com"
+  defaultCacheDuration: "12h"
+  apiVersion: credentialprovider.kubelet.k8s.io/v1
+EOF
 
-# Create ECR-specific config directory
-sudo mkdir -p /etc/containerd/certs.d/'$AWS_ACCOUNT_ID'.dkr.ecr.'$REGION'.amazonaws.com
+echo "✅ Credential provider config created"
 
-# Create hosts.toml for ECR
-sudo tee /etc/containerd/certs.d/'$AWS_ACCOUNT_ID'.dkr.ecr.'$REGION'.amazonaws.com/hosts.toml > /dev/null <<HOSTEOF
-server = "https://'$AWS_ACCOUNT_ID'.dkr.ecr.'$REGION'.amazonaws.com"
-
-[host."https://'$AWS_ACCOUNT_ID'.dkr.ecr.'$REGION'.amazonaws.com"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://'$AWS_ACCOUNT_ID'.dkr.ecr.'$REGION'.amazonaws.com".header]
-  x-amazon-ecr-login = ["ecr-login"]
-HOSTEOF
-
-# Restart containerd to apply changes
-echo "Restarting containerd..."
-sudo systemctl restart containerd
-
-# Verify containerd is running
-if sudo systemctl is-active --quiet containerd; then
-    echo "✅ Containerd restarted successfully"
-else
-    echo "❌ Containerd failed to start"
-    sudo systemctl status containerd --no-pager
-    exit 1
-fi
-
-echo "✅ ECR Credential Helper configured for containerd"
+echo "✅ ECR Credential Provider configured - will activate after kubelet starts"
 '
-    
-    run_on_all_nodes "$ECR_HELPER_SCRIPT" "Installing and configuring ECR Credential Helper"
-    
-    print_success "ECR Credential Helper installed on all nodes!"
-    print_info "Pods can now pull from ECR using the EC2 IAM role - no secrets needed!"
+
+    run_on_all_nodes "$ECR_PROVIDER_SCRIPT" "Installing ECR Credential Provider"
+
+    print_success "ECR Credential Provider installed on all nodes!"
+    print_info "Kubelet will be configured to use it during cluster initialization"
 }
 
 # Initialize Kubernetes cluster on master
 initialize_cluster() {
     print_header "Initializing Kubernetes Cluster on Master Node"
-    
+
     print_info "Initializing cluster (this may take 2-3 minutes)..."
-    
+
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP << EOF
 set -e
 
@@ -273,16 +251,59 @@ sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config
 
 echo "Cluster initialized successfully"
 EOF
-    
+
     print_success "Kubernetes cluster initialized on master"
+}
+
+# Configure kubelet to use ECR credential provider
+configure_kubelet_ecr() {
+    print_header "Configuring Kubelet to Use ECR Credential Provider"
+
+    KUBELET_CONFIG_SCRIPT='
+#!/bin/bash
+set -e
+
+echo "Configuring kubelet to use ECR credential provider..."
+
+# Update kubelet config
+if ! grep -q "imageCredentialProviderConfig" /var/lib/kubelet/config.yaml 2>/dev/null; then
+    sudo bash -c "cat >> /var/lib/kubelet/config.yaml <<KUBEOF
+imageCredentialProviderConfig: /etc/kubernetes/ecr-credential-config.yaml
+imageCredentialProviderBinDir: /usr/local/bin
+KUBEOF"
+    echo "✅ Kubelet config updated"
+else
+    echo "✅ Kubelet already configured"
+fi
+
+# Restart kubelet
+echo "Restarting kubelet..."
+sudo systemctl restart kubelet
+
+# Wait and verify
+sleep 5
+if sudo systemctl is-active --quiet kubelet; then
+    echo "✅ Kubelet restarted successfully"
+else
+    echo "❌ Kubelet failed to start"
+    sudo systemctl status kubelet --no-pager
+    exit 1
+fi
+
+echo "✅ ECR Credential Provider activated for kubelet"
+'
+
+    run_on_all_nodes "$KUBELET_CONFIG_SCRIPT" "Configuring kubelet for ECR"
+
+    print_success "All nodes configured to use ECR Credential Provider"
 }
 
 # Install Calico CNI
 install_calico() {
     print_header "Installing Calico CNI"
-    
+
     print_info "Deploying Calico network plugin..."
-    
+
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP << EOF
 set -e
 
@@ -298,9 +319,9 @@ kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/$CALICO
 
 echo "Calico CNI installed"
 EOF
-    
+
     print_success "Calico CNI installed"
-    
+
     # Wait for nodes to be ready
     print_info "Waiting for master node to be Ready (this may take 2-3 minutes)..."
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP << 'EOF'
@@ -317,28 +338,28 @@ while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
     ATTEMPTS=$((ATTEMPTS+1))
 done
 EOF
-    
+
     print_success "Master node is Ready"
 }
 
 # Get join command
 get_join_command() {
     print_header "Generating Worker Join Command"
-    
+
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP \
         "sudo kubeadm token create --print-join-command" > /tmp/k8s-join-command.sh
-    
+
     chmod +x /tmp/k8s-join-command.sh
-    
+
     print_success "Join command generated"
 }
 
 # Join worker nodes
 join_workers() {
     print_header "Joining Worker Nodes to Cluster"
-    
+
     JOIN_CMD=$(cat /tmp/k8s-join-command.sh)
-    
+
     # Worker 1
     print_info "Joining worker1..."
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$WORKER1_PUBLIC_IP << EOF
@@ -347,7 +368,7 @@ sudo $JOIN_CMD
 echo "Worker1 joined successfully"
 EOF
     print_success "Worker1 joined the cluster"
-    
+
     # Worker 2
     print_info "Joining worker2..."
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$WORKER2_PUBLIC_IP << EOF
@@ -356,7 +377,7 @@ sudo $JOIN_CMD
 echo "Worker2 joined successfully"
 EOF
     print_success "Worker2 joined the cluster"
-    
+
     # Clean up
     rm -f /tmp/k8s-join-command.sh
 }
@@ -364,10 +385,10 @@ EOF
 # Verify cluster
 verify_cluster() {
     print_header "Verifying Kubernetes Cluster"
-    
+
     print_info "Waiting for all nodes to be Ready..."
     sleep 30
-    
+
     ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP << 'EOF'
 ATTEMPTS=0
 MAX_ATTEMPTS=20
@@ -394,24 +415,24 @@ echo ""
 echo "=== System Pods ==="
 kubectl get pods -n kube-system
 EOF
-    
+
     print_success "Cluster verification complete"
 }
 
 # Setup kubectl locally
 setup_local_kubectl() {
     print_header "Setting Up kubectl on Local Machine"
-    
+
     print_info "Downloading kubeconfig from master..."
-    
+
     mkdir -p ~/.kube
     scp -o StrictHostKeyChecking=no -i "$KEY_FILE" \
         ubuntu@$MASTER_PUBLIC_IP:~/.kube/config \
         ~/.kube/config-haddar-retail-store 2>/dev/null || true
-    
+
     # Update server address to use public IP
     sed -i "s|server: https://.*:6443|server: https://${MASTER_PUBLIC_IP}:6443|" ~/.kube/config-haddar-retail-store
-    
+
     # Set as default kubeconfig or merge
     if [ ! -f ~/.kube/config ]; then
         cp ~/.kube/config-haddar-retail-store ~/.kube/config
@@ -421,7 +442,7 @@ setup_local_kubectl() {
         print_success "kubeconfig downloaded to ~/.kube/config-haddar-retail-store"
         print_info "Use: export KUBECONFIG=~/.kube/config-haddar-retail-store"
     fi
-    
+
     # Test local kubectl
     if kubectl get nodes &>/dev/null; then
         print_success "kubectl configured successfully on local machine"
@@ -434,7 +455,7 @@ setup_local_kubectl() {
 # Print summary
 print_summary() {
     print_header "Kubernetes Cluster Setup Complete!"
-    
+
     echo -e "${GREEN}✅ Kubernetes cluster is ready!${NC}"
     echo ""
     echo -e "${BLUE}Cluster Configuration:${NC}"
@@ -446,7 +467,7 @@ print_summary() {
     echo ""
     echo -e "${CYAN}ECR Authentication (Option B):${NC}"
     echo "  ✅ ECR Credential Helper installed on all nodes"
-    echo "  ✅ Containerd configured to use IAM role"
+    echo "  ✅ Kubelet configured to use IAM role"
     echo "  ✅ No ECR tokens or secrets needed!"
     echo "  ✅ Pods can pull images directly from ECR"
     echo ""
@@ -475,10 +496,11 @@ main() {
     install_calico
     get_join_command
     join_workers
+    configure_kubelet_ecr
     verify_cluster
     setup_local_kubectl
     print_summary
-    
+
     echo -e "\n${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║    Kubernetes Cluster Setup Completed! 🎉            ║${NC}"
     echo -e "${GREEN}╚═══════════════════════════════════════════════════════╝${NC}\n"

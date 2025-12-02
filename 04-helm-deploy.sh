@@ -1,18 +1,11 @@
 #!/bin/bash
 
 ################################################################################
-# Helm Deployment Script - Phase 4 Demonstration
-# Deploy the retail store application using Helm
-#
-# This script:
-# 1. Creates the retail-store namespace
-# 2. Deploys PostgreSQL, Redis, RabbitMQ using Bitnami charts
-# 3. Deploys all 5 microservices using custom Helm chart
-# 4. Installs nginx-ingress controller
-# 5. Verifies all pods are running
+# Kubernetes kubeadm Cluster - Helm Deployment Script
+# Phase 4: Deploy all microservices and dependencies using Helm
 ################################################################################
 
-set -e  # Exit on any error
+set -e
 
 # Load environment variables
 if [ ! -f deployment-info.txt ]; then
@@ -25,8 +18,7 @@ source deployment-info.txt
 
 # Configuration
 NAMESPACE="retail-store"
-HELM_RELEASE="retail-store"
-DEPENDENCIES_RELEASE="dependencies"
+HELM_CHART_DIR="helm-chart"
 
 # Colors for output
 RED='\033[0;31m'
@@ -34,7 +26,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Helper functions
 print_header() {
@@ -62,234 +54,244 @@ print_info() {
 # Main header
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════╗"
-echo "║   Helm Deployment - Phase 4 Demonstration            ║"
-echo "║   Deploy Retail Store Application with Helm          ║"
+echo "║   Kubernetes kubeadm Cluster - Helm Deployment       ║"
+echo "║   Phase 4: Application & Dependencies Deployment     ║"
 echo "╚═══════════════════════════════════════════════════════╝"
 echo -e "${NC}\n"
 
 # Check prerequisites
 check_prerequisites() {
     print_header "Checking Prerequisites"
-    
-    # Check kubectl
+
+    if ! command -v helm &> /dev/null; then
+        print_error "Helm not found. Please run: ./00-prerequisites.sh"
+        exit 1
+    fi
+    HELM_VERSION=$(helm version --short 2>/dev/null || helm version --template='{{.Version}}' 2>/dev/null)
+    print_success "Helm installed: ${HELM_VERSION}"
+
     if ! command -v kubectl &> /dev/null; then
         print_error "kubectl not found"
         exit 1
     fi
-    print_success "kubectl found"
-    
-    # Check Helm
-    if ! command -v helm &> /dev/null; then
-        print_error "Helm not found. Run ./00-prerequisites.sh first."
+    print_success "kubectl installed"
+
+    if [ ! -f "$KEY_FILE" ]; then
+        print_error "SSH key not found: $KEY_FILE"
         exit 1
     fi
-    HELM_VERSION=$(helm version --short 2>/dev/null || helm version --template='{{.Version}}' 2>/dev/null)
-    print_success "Helm found: ${HELM_VERSION}"
-    
-    # Check cluster connection
-    if ! kubectl get nodes &> /dev/null; then
-        print_error "Cannot connect to Kubernetes cluster"
-        print_info "Make sure: export KUBECONFIG=~/.kube/config-haddar-retail-store"
+    print_success "SSH key found"
+
+    print_info "Configuring kubectl..."
+    mkdir -p ~/.kube
+    scp -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP:~/.kube/config ~/.kube/config-retail-store 2>/dev/null
+    sed -i "s|server: https://.*:6443|server: https://${MASTER_PUBLIC_IP}:6443|g" ~/.kube/config-retail-store
+    export KUBECONFIG=~/.kube/config-retail-store
+    kubectl config set-cluster kubernetes --insecure-skip-tls-verify=true
+
+    NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+    if [ "$NODE_COUNT" -lt 3 ]; then
+        print_error "Cluster has only $NODE_COUNT node(s). Expected 3"
         exit 1
     fi
-    print_success "Connected to Kubernetes cluster"
-    
-    # Show cluster info
-    NODES=$(kubectl get nodes --no-headers | wc -l)
-    print_info "Cluster has ${NODES} nodes"
+    print_success "Cluster has $NODE_COUNT nodes"
 }
 
-# Create namespace
 create_namespace() {
     print_header "Creating Namespace"
-    
+
     if kubectl get namespace $NAMESPACE &> /dev/null; then
         print_warning "Namespace '${NAMESPACE}' already exists"
+        # Add Helm labels to existing namespace
+        kubectl label namespace $NAMESPACE app.kubernetes.io/managed-by=Helm --overwrite 2>/dev/null
+        kubectl annotate namespace $NAMESPACE meta.helm.sh/release-name=retail-store --overwrite 2>/dev/null
+        kubectl annotate namespace $NAMESPACE meta.helm.sh/release-namespace=retail-store --overwrite 2>/dev/null
+        print_info "Helm labels added to namespace"
     else
         kubectl create namespace $NAMESPACE
-        print_success "Namespace '${NAMESPACE}' created"
+        # Add Helm labels to new namespace
+        kubectl label namespace $NAMESPACE app.kubernetes.io/managed-by=Helm
+        kubectl annotate namespace $NAMESPACE meta.helm.sh/release-name=retail-store
+        kubectl annotate namespace $NAMESPACE meta.helm.sh/release-namespace=retail-store
+        print_success "Namespace created with Helm labels"
     fi
 }
 
-# Deploy dependencies (PostgreSQL, Redis, RabbitMQ)
-deploy_dependencies() {
-    print_header "Deploying Dependencies (PostgreSQL, Redis, RabbitMQ)"
-    
-    # Add Bitnami repo if not exists
-    print_info "Adding Bitnami Helm repository..."
-    helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || print_warning "Bitnami repo already exists"
+add_helm_repos() {
+    print_header "Adding Helm Repositories"
+
+    helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || print_info "Bitnami repo exists"
+    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || print_info "Ingress repo exists"
     helm repo update
-    
-    print_success "Helm repositories updated"
-    
-    # Deploy PostgreSQL
+    print_success "Helm repositories configured"
+}
+
+install_postgresql() {
+    print_header "Installing PostgreSQL (for Catalog & Orders)"
+
     print_info "Deploying PostgreSQL..."
     helm upgrade --install postgresql bitnami/postgresql \
         --namespace $NAMESPACE \
-        --set auth.username=retail \
-        --set auth.password=retail123 \
-        --set auth.database=retail \
+        --set auth.postgresPassword=postgres \
+        --set auth.database=catalog \
         --set primary.persistence.enabled=false \
-        --set readReplicas.persistence.enabled=false \
+        --set volumePermissions.enabled=true \
         --wait --timeout=10m
-    
+
     print_success "PostgreSQL deployed"
-    
-    # Deploy Redis
+}
+
+install_redis() {
+    print_header "Installing Redis (for Cart)"
+
     print_info "Deploying Redis..."
     helm upgrade --install redis bitnami/redis \
         --namespace $NAMESPACE \
         --set auth.enabled=false \
         --set master.persistence.enabled=false \
+        --set replica.replicaCount=0 \
         --set replica.persistence.enabled=false \
         --wait --timeout=10m
-    
+
     print_success "Redis deployed"
-    
-    # Deploy RabbitMQ
-    print_info "Deploying RabbitMQ (this may take a few minutes)..."
-    helm upgrade --install rabbitmq bitnami/rabbitmq \
-        --namespace $NAMESPACE \
-        --set auth.username=admin \
-        --set auth.password=admin123 \
-        --set persistence.enabled=false \
-        --set replicaCount=1 \
-        --set resources.requests.memory=512Mi \
-        --set resources.requests.cpu=250m \
-        --set livenessProbe.timeoutSeconds=10 \
-        --set readinessProbe.timeoutSeconds=10 \
-        --wait --timeout=15m
-    
+}
+
+install_rabbitmq() {
+    print_header "Installing RabbitMQ (for Checkout)"
+
+    kubectl delete deployment rabbitmq -n $NAMESPACE 2>/dev/null || true
+    kubectl delete service rabbitmq -n $NAMESPACE 2>/dev/null || true
+    sleep 3
+
+    print_info "Deploying RabbitMQ..."
+
+    kubectl apply -n $NAMESPACE -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  labels:
+    app: rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+      - name: rabbitmq
+        image: rabbitmq:3.13-management
+        ports:
+        - containerPort: 5672
+          name: amqp
+        - containerPort: 15672
+          name: management
+        env:
+        - name: RABBITMQ_DEFAULT_USER
+          value: "guest"
+        - name: RABBITMQ_DEFAULT_PASS
+          value: "guest"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+  - port: 5672
+    targetPort: 5672
+    name: amqp
+  - port: 15672
+    targetPort: 15672
+    name: management
+EOF
+
+    print_info "Waiting for RabbitMQ..."
+    kubectl wait --for=condition=available --timeout=300s deployment/rabbitmq -n $NAMESPACE
+
     print_success "RabbitMQ deployed"
 }
 
-# Update Helm chart values with current ECR URLs
-update_helm_values() {
-    print_header "Updating Helm Chart Values"
-    
-    print_info "Updating values.yaml with current ECR repository URLs..."
-    
-    # Backup original
-    cp helm-chart/values.yaml helm-chart/values.yaml.bak 2>/dev/null || true
-    
-    # Update ECR URLs
-    sed -i "s|repository:.*retail-store-ui|repository: ${ECR_UI_REPO}|" helm-chart/values.yaml
-    sed -i "s|repository:.*retail-store-catalog|repository: ${ECR_CATALOG_REPO}|" helm-chart/values.yaml
-    sed -i "s|repository:.*retail-store-cart|repository: ${ECR_CART_REPO}|" helm-chart/values.yaml
-    sed -i "s|repository:.*retail-store-orders|repository: ${ECR_ORDERS_REPO}|" helm-chart/values.yaml
-    sed -i "s|repository:.*retail-store-checkout|repository: ${ECR_CHECKOUT_REPO}|" helm-chart/values.yaml
-    
-    print_success "Helm values updated with ECR repository URLs"
-}
-
-# Deploy application
 deploy_application() {
     print_header "Deploying Retail Store Application"
-    
-    print_info "Deploying microservices with Helm..."
-    
-    helm upgrade --install $HELM_RELEASE ./helm-chart \
+
+    print_info "Deploying microservices..."
+
+    helm upgrade --install retail-store ./helm-chart \
         --namespace $NAMESPACE \
-        --set global.dynamodbTableName=$DYNAMODB_TABLE_NAME \
-        --set global.region=$REGION \
+        --set global.ecr.registry=$ECR_REGISTRY \
+        --set global.dynamodb.tableName=$DYNAMODB_TABLE_NAME \
+        --set global.dynamodb.region=$REGION \
         --wait --timeout=10m
-    
-    print_success "Application deployed with Helm"
+
+    print_success "Application deployed"
 }
 
-# Install nginx-ingress
 install_ingress() {
     print_header "Installing nginx-ingress Controller"
-    
-    print_info "Adding nginx-ingress repository..."
-    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
-    helm repo update
-    
+
+    kubectl create namespace ingress-nginx 2>/dev/null || true
+
     print_info "Deploying nginx-ingress..."
     helm upgrade --install nginx-ingress ingress-nginx/ingress-nginx \
-        --namespace $NAMESPACE \
+        --namespace ingress-nginx \
         --set controller.service.type=NodePort \
         --set controller.service.nodePorts.http=30080 \
         --set controller.service.nodePorts.https=30443 \
         --wait --timeout=5m
-    
-    print_success "nginx-ingress controller installed"
+
+    print_success "nginx-ingress installed"
 }
 
-# Verify deployment
 verify_deployment() {
     print_header "Verifying Deployment"
-    
-    print_info "Waiting for all pods to be ready (this may take 3-5 minutes)..."
-    
-    # Wait for pods
-    kubectl wait --for=condition=ready pod \
-        --all \
-        --namespace=$NAMESPACE \
-        --timeout=600s 2>/dev/null || print_warning "Some pods may still be starting..."
-    
-    echo ""
-    print_info "Checking pod status..."
+
     kubectl get pods -n $NAMESPACE
-    
+
+    print_info "Waiting for pods to be ready..."
+    kubectl wait --for=condition=ready pod --all -n $NAMESPACE --timeout=300s 2>/dev/null || print_warning "Some pods still starting"
+
     echo ""
-    print_info "Checking services..."
     kubectl get svc -n $NAMESPACE
 }
 
-# Print access information
-print_access_info() {
-    print_header "Application Access Information"
-    
-    echo -e "${GREEN}✅ Application deployed successfully with Helm!${NC}"
+print_summary() {
+    print_header "Deployment Complete!"
+
+    echo -e "${GREEN}✅ Application deployed with Helm!${NC}"
     echo ""
-    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Access Your Application                               ${NC}"
-    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${CYAN}🛒 Retail Store Application:${NC}"
+    echo -e "${CYAN}🛒 Access Application:${NC}"
     echo -e "   ${GREEN}http://${MASTER_PUBLIC_IP}:30080${NC}"
     echo ""
-    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${YELLOW}📋 Deployment Details:${NC}"
-    echo "  Namespace:        ${NAMESPACE}"
-    echo "  Helm Release:     ${HELM_RELEASE}"
-    echo "  Ingress:          nginx (NodePort 30080)"
-    echo ""
-    echo -e "${CYAN}Useful Commands:${NC}"
+    echo -e "${YELLOW}Useful Commands:${NC}"
     echo "  kubectl get pods -n ${NAMESPACE}"
-    echo "  kubectl get svc -n ${NAMESPACE}"
     echo "  kubectl logs -n ${NAMESPACE} -l app=ui --tail=50"
     echo "  helm list -n ${NAMESPACE}"
     echo ""
-    echo -e "${YELLOW}⚠️  Important Notes:${NC}"
-    echo "  • This is Phase 4 - Helm deployment demonstration"
-    echo "  • Images pulled from ECR using IAM role (no secrets!)"
-    echo "  • Application is fully managed by Helm"
-    echo "  • Next: Phase 5 - Transition to ArgoCD (GitOps)"
-    echo ""
-    echo -e "${BLUE}Next Steps:${NC}"
-    echo "  1. Test the application in your browser"
-    echo "  2. Proceed to Phase 5: ./05-create-gitops-repo.sh"
-    echo "  3. Install ArgoCD:      ./06-argocd-setup.sh"
 }
 
 # Main execution
 main() {
     check_prerequisites
     create_namespace
-    deploy_dependencies
-    update_helm_values
+    add_helm_repos
+    install_postgresql
+    install_redis
+    install_rabbitmq
     deploy_application
     install_ingress
     verify_deployment
-    print_access_info
-    
+    print_summary
+
     echo -e "\n${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║      Helm Deployment Completed Successfully! 🎉       ║${NC}"
     echo -e "${GREEN}╚═══════════════════════════════════════════════════════╝${NC}\n"
 }
 
-# Run main function
 main
