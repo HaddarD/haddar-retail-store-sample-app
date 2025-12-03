@@ -27,6 +27,23 @@ gitops-retail-store-app/
 
 ---
 
+## Current Project Implementation
+
+| Aspect | Our Implementation |
+|--------|-------------------|
+| Environments | Single (dev/learning) |
+| Namespace | `retail-store` |
+| Image Tags | Commit SHA |
+| Auto-sync | Enabled |
+| Replicas | 1 per service |
+| Authentication | ECR Credential Helper (no secrets) |
+
+This demonstrates GitOps principles while keeping the project manageable for learning purposes.
+
+---
+# ⬇️ THEORETICAL: Multi-Environment Production Setup ⬇️
+---
+
 ## Production-Ready Structure (Multi-Environment)
 
 In a real-world scenario, you would implement environment-specific configurations:
@@ -70,7 +87,7 @@ gitops-retail-store-app/
 
 ## ArgoCD per Environment
 
-Each environment would have separate ArgoCD Applications:
+In a Production environment - Each environment would have separate ArgoCD Applications:
 ```yaml
 # Dev
 spec:
@@ -93,7 +110,7 @@ spec:
 
 ---
 
-## Promotion Workflow
+## Promotion Workflow per environment
 ```
 ┌─────────┐     ┌─────────┐     ┌──────────┐
 │   DEV   │────▶│ STAGING │────▶│   PROD   │
@@ -105,21 +122,6 @@ spec:
 1. Push to `main` → auto-deploy to dev
 2. Create RC tag → auto-deploy to staging
 3. QA approval → create release tag → manual deploy to prod
-
----
-
-## Current Project Implementation
-
-| Aspect | Our Implementation |
-|--------|-------------------|
-| Environments | Single (dev/learning) |
-| Namespace | `retail-store` |
-| Image Tags | Commit SHA |
-| Auto-sync | Enabled |
-| Replicas | 1 per service |
-| Authentication | ECR Credential Helper (no secrets) |
-
-This demonstrates GitOps principles while keeping the project manageable for learning purposes.
 
 ---
 

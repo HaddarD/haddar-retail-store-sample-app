@@ -258,7 +258,7 @@ configure_kubeconfig
 
 # Update ArgoCD URL
 if [ -n "$MASTER_PUBLIC_IP" ]; then
-    ARGOCD_URL="https://${MASTER_PUBLIC_IP}:30090"
+    ARGOCD_URL="http://${MASTER_PUBLIC_IP}:30090"
     update_deployment_info "ARGOCD_URL" "$ARGOCD_URL"
     export ARGOCD_URL
     print_success "ArgoCD URL updated: $ARGOCD_URL"

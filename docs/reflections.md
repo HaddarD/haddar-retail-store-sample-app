@@ -99,22 +99,34 @@ Lesson: IaC makes complex infrastructure reproducible! 🎯
 
 ---
 
+---
+
 ## ECR Credential Helper vs Token Refresh 🔐
 
 **Original approach:** Manually refresh ECR tokens every 12 hours.
 ```bash
 # Had to run this constantly
-./04-ecr-setup.sh
 kubectl rollout restart deployment -n retail-store
 ```
 
 **Problem:** After stopping EC2 instances for a week, tokens expired and everything broke.
 
-**Teacher recommendation:** Use ECR Credential Helper (Option B).
+**Teacher recommendation:** Use cron job on the cluster (prod env best practice).
+
+But wait... there were OTHER options too! 🤔
+
+| Option | Pros | Cons | Verdict |
+|--------|------|------|---------|
+| **Cron on EC2** (every 6h + boot) | Runs on boot! | Extra scripts on every node | 🤔 |
+| **Cron on Cluster** (CronJob) | Production best practice! | Doesn't run on boot | ❌ |
+| **CI/CD refresh** (every push) | Piggybacks on pipeline | Only works when pushing | ❌ |
+| **ECR Credential Helper** | Just works, IAM role | Trickier to install | ✅ |
+
+My EC2s are off 95% of the time (only on for demos). CronJobs don't run if cluster is down. Credential helper uses IAM role - no tokens, no expiration, no maintenance! 🎉
 
 **New approach:**
-- Install `amazon-ecr-credential-helper` on all nodes
-- Configure `containerd` to use it
+- Install ECR credential provider binary on all nodes
+- Configure kubelet to use it
 - Uses EC2 IAM role automatically
 - No tokens, no secrets, no expiration!
 
@@ -124,7 +136,16 @@ kubectl rollout restart deployment -n retail-store
 - ✅ Works after EC2 downtime
 - ✅ Zero maintenance
 
-Best decision ever! Why didn't I do this from the start? 😅
+### But Installing It Wasn't Easy... 🔧
+
+**Issue:** Wrong binary downloaded 😅
+- First URL returned a tiny HTML error page, not the 20MB binary
+- Script thought it worked... until `ImagePullBackOff`
+- **Fix:** Added file size verification (must be >10MB)
+
+Total debugging time: ~4 hours. But now it works perfectly! 💪
+
+Best decision ever! Why didn't I do this from the start? ٩(◕‿◕｡)۶
 
 ---
 

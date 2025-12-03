@@ -7,7 +7,7 @@ A microservices e-commerce application deployed on a self-managed Kubernetes clu
 - 🏗️ **Complete Infrastructure as Code** - Terraform provisions ALL AWS resources
 - 🏛️ **Self-managed Kubernetes** cluster using kubeadm (not EKS)
 - 🐳 **5 Microservices**: UI, Catalog, Cart, Orders, Checkout
-- 📦 **AWS ECR** with automatic authentication (no token expiration!)
+- 📦 **AWS ECR** with credential helper automatic authentication (no token expiration!)
 - 🔄 **GitHub Actions CI/CD** pipeline
 - 🚀 **ArgoCD GitOps** for automated deployments
 - 📊 **Automated bash scripts** for daily operations
@@ -43,14 +43,14 @@ A microservices e-commerce application deployed on a self-managed Kubernetes clu
 
 - AWS CLI configured with appropriate permissions
 - GitHub account with repository access
-- Bash terminal (Linux/macOS/WSL)
+- Bash terminal (Linux)
 - ~$3-6/day AWS costs (3x t3.medium EC2 instances)
 
 ## Quick Start 🚀
 
 ### First Time Setup
 ```bash
-# 1. Clone the repository
+# 1. Fork & clone this repo
 git clone https://github.com/HaddarD/haddar-retail-store-sample-app.git
 cd haddar-retail-store-sample-app
 
@@ -69,28 +69,33 @@ ssh-keygen -t rsa -b 4096 -f haddar-k8s-kubeadm-key -N ""
 # 6. Load environment variables
 source restore-vars.sh
 
-# 7. Initialize Kubernetes cluster + ECR authentication
+# 7. Initialize Kubernetes cluster + ECR Credential Helper for  authentication
 ./03-k8s-init.sh
 
-# 8. Push your code to GitHub (needed for ArgoCD later)
+# 8. Push your code to GitHub (needed for Helm deployment ECR images & for ArgoCD later - GitOps CI/CD step will fail because repo doesn't exist yet)
 git add .
 git commit -m "Initial setup"
 git push origin main
 
-# 9. Deploy with Helm (Phase 4 demonstration)
+# 9. Deploy with Helm (Phase 4)
 ./04-helm-deploy.sh
 
 # 10. Create GitOps repository (Phase 5)
 ./05-create-gitops-repo.sh
-# Add GITOPS_PAT secret to GitHub repository settings
+# Add GITOPS_PAT secret to GitHub repository settings (follow end of script instructions)
 
-# 11. Install ArgoCD (takes over from Helm)
+# 11. Push your code to GitHub (needed to update GitOps for ArgoCD - all CI/CD steps should pass)
+git add .
+git commit -m "GitOps & ArgoCD ready"
+git push origin main
+
+# 12. Install ArgoCD (takes over from Helm)
 ./06-argocd-setup.sh
 ```
 
 ### Daily Startup
 ```bash
-./startup.sh && source restore-vars.sh
+source startup.sh
 ```
 
 ### Access the Application
@@ -99,7 +104,7 @@ git push origin main
 
 # Or manually:
 # Retail Store: http://<MASTER_IP>:30080
-# ArgoCD UI: https://<MASTER_IP>:30090
+# ArgoCD UI: http://<MASTER_IP>:30090
 ```
 
 ## Project Structure
@@ -140,44 +145,46 @@ haddar-retail-store-sample-app/
 ├── Display-App-URLs.sh           # Show URLs
 ├── 99-cleanup.sh                 # Destroy everything
 │
-└── deployment-info.txt           # Generated variables
+└── deployment-info.txt           # Generated variables (not in this repo - created by 02-terraform-apply.sh)
 ```
 
 ## Scripts Reference
 
-| Script | Purpose | When to Run |
-|--------|---------|-------------|
-| `00-prerequisites.sh` | Install tools (Terraform, Helm, etc.) | Once |
-| `01-terraform-init.sh` | Bootstrap S3 backend for Terraform | Once |
-| `02-terraform-apply.sh` | Create ALL AWS infrastructure | Once |
-| `03-k8s-init.sh` | Initialize K8s + ECR Credential Helper | Once |
-| `04-helm-deploy.sh` | Deploy app with Helm (Phase 4) | Once |
-| `05-create-gitops-repo.sh` | Create GitOps repository | Once |
-| `06-argocd-setup.sh` | Install ArgoCD (Phase 5) | Once |
-| `startup.sh` | Start EC2s, update IPs | Every session |
-| `restore-vars.sh` | Load environment variables | Every session |
-| `Display-App-URLs.sh` | Show application URLs | Anytime |
-| `99-cleanup.sh` | Destroy ALL resources | End of project |
+| Script | Purpose                                       | When to Run    |
+|--------|-----------------------------------------------|----------------|
+| `00-prerequisites.sh` | Install tools (Terraform, Helm, etc.)         | Once           |
+| `01-terraform-init.sh` | Bootstrap S3 backend for Terraform            | Once           |
+| `02-terraform-apply.sh` | Create ALL AWS infrastructure                 | Once           |
+| `03-k8s-init.sh` | Initialize K8s + ECR Credential Helper        | Once           |
+| `04-helm-deploy.sh` | Deploy app with Helm (Phase 4)                | Once           |
+| `05-create-gitops-repo.sh` | Create GitOps repository                      | Once           |
+| `06-argocd-setup.sh` | Deploys with ArgoCD instead of Helm (Phase 5) | Once           |
+| `startup.sh` | Start EC2s, update IPs, configure kubectl, load all variables     | Every session  |
+| `restore-vars.sh` | Load environment variables only (alternative)                    | New Terminal   |
+| `Display-App-URLs.sh` | Show ArgoCD application URLs                  | Anytime        |
+| `99-cleanup.sh` | Destroy ALL resources                         | End of project |
 
 ## GitHub Secrets Required
 
 Add these to your GitHub repository settings → Secrets and variables → Actions:
 
-| Secret | Description |
-|--------|-------------|
-| `AWS_ACCESS_KEY_ID` | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
+| Secret | Description                                    |
+|--------|------------------------------------------------|
+| `AWS_ACCOUNT_ID` | AWS Account ID                                 |
+| `AWS_ACCESS_KEY_ID` | AWS access key                                 |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key                                 |
+| `AWS_REGION` | AWS region (mine is us-east-1)                 |
 | `GITOPS_PAT` | GitHub Personal Access Token (for GitOps repo) |
 
-## What's New: Terraform + ECR Credential Helper
+## Terraform + ECR Credential Helper
 
 **Complete Terraform Infrastructure:**
-- Everything is now created via Terraform (VPC, EC2, ECR, DynamoDB, IAM)
+- Everything is created via Terraform (VPC, EC2, ECR, DynamoDB, IAM)
 - Stored in S3 backend with DynamoDB locking
 - One command to create, one command to destroy
 
 **ECR Credential Helper (No More Token Expiration!):**
-- Uses EC2 IAM role for authentication
+- Uses EC2 IAM role for authentication (set by terraform)
 - No imagePullSecrets needed
 - No 12-hour token refresh required
 - Images pull automatically from ECR
@@ -187,6 +194,8 @@ Add these to your GitHub repository settings → Secrets and variables → Actio
 # Check cluster status
 kubectl get nodes
 kubectl get pods -n retail-store
+kubectl get svc -n retail-store
+kubectl get ingress -n retail-store
 
 # Check ArgoCD applications
 kubectl get applications -n argocd
@@ -202,25 +211,18 @@ cd terraform
 terraform plan        # Show what would change
 terraform show        # Show current state
 terraform output      # Show all outputs
+terraform state list  # List all resources
+terraform validate    # Check config syntax
+terraform fmt -check  # Check code formatting
+terraform apply       # Applies all terraform files and creates AWS infrastructure (could change current infrastructure)
+terraform destroy     # Erases the entire infrastructure
 ```
 
 ## Troubleshooting
 
-### Pods stuck in ImagePullBackOff
-ECR Credential Helper should handle this automatically. If issues persist:
-```bash
-# Check IAM role is attached
-aws ec2 describe-instances --instance-ids $MASTER_INSTANCE_ID \
-  --query 'Reservations[0].Instances[0].IamInstanceProfile'
-
-# Verify credential helper is installed
-ssh -i haddar-k8s-kubeadm-key ubuntu@$MASTER_PUBLIC_IP \
-  "docker-credential-ecr-login -v"
-```
-
 ### Cannot connect to cluster
 ```bash
-./startup.sh && source restore-vars.sh
+source startup.sh
 ```
 
 ### Terraform state issues
@@ -231,7 +233,7 @@ terraform init -reconfigure
 
 ## Cleanup
 
-**⚠️ This deletes ALL resources!**
+**⚠️ This deletes ALL resources & infrastructure!**
 ```bash
 ./99-cleanup.sh
 ```
@@ -254,4 +256,4 @@ terraform init -reconfigure
 
 ---
 
-*DevOps project demonstrating Terraform IaC, Kubernetes, CI/CD, and GitOps* 🎓
+*DevOps project demonstrating Terraform IaC, Kubernetes, CI/CD, Helm, and GitOps* 🎓
