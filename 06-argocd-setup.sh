@@ -259,7 +259,7 @@ print_summary() {
     echo -e "   ${GREEN}http://${MASTER_PUBLIC_IP}:30080${NC}"
     echo ""
     echo -e "${CYAN}🚀 ArgoCD Dashboard:${NC}"
-    echo -e "   ${GREEN}https://${MASTER_PUBLIC_IP}:${ARGOCD_NODEPORT}${NC}"
+    echo -e "   ${GREEN}http://${MASTER_PUBLIC_IP}:${ARGOCD_NODEPORT}${NC}"
     echo -e "   Username: ${YELLOW}admin${NC}"
     echo -e "   Password: ${YELLOW}${ARGOCD_ADMIN_PASSWORD}${NC}"
     echo ""

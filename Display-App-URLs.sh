@@ -19,7 +19,7 @@ echo "════════════════════════�
 echo ""
 echo "🛒 Retail Store App: http://${MASTER_PUBLIC_IP}:30080"
 echo ""
-echo "🚀 ArgoCD Dashboard: https://${MASTER_PUBLIC_IP}:30090"
+echo "🚀 ArgoCD Dashboard: http://${MASTER_PUBLIC_IP}:30090"
 echo "   Username: admin"
 echo "   Password: ${ARGOCD_ADMIN_PASSWORD:-<not set yet - run 06-argocd-setup.sh>}"
 echo ""
