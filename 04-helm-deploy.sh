@@ -356,7 +356,8 @@ install_ingress() {
         --set controller.service.type=NodePort \
         --set controller.service.nodePorts.http=30080 \
         --set controller.service.nodePorts.https=30443 \
-        --wait --timeout=5m
+        --set controller.admissionWebhooks.enabled=false \
+        --wait --timeout=10m
 
     print_success "nginx-ingress installed on NodePort 30080/30443"
 }

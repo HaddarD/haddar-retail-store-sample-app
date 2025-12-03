@@ -99,6 +99,70 @@ check_prerequisites() {
     print_success "GitHub username: ${GITHUB_USER}"
 }
 
+# Install GitHub CLI
+install_github_cli() {
+    print_header "Checking GitHub CLI"
+
+    if command -v gh &> /dev/null; then
+        print_success "GitHub CLI already installed"
+    else
+        print_info "Installing GitHub CLI..."
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh -y
+        print_success "GitHub CLI installed"
+    fi
+}
+
+# Authenticate with GitHub
+authenticate_github() {
+    print_header "GitHub Authentication"
+
+    if gh auth status &> /dev/null; then
+        GITHUB_USER=$(gh api user --jq '.login')
+        print_success "Already authenticated as: ${GITHUB_USER}"
+    else
+        print_warning "Not authenticated with GitHub CLI"
+        print_info "Authenticating via SSH..."
+        gh auth login -p ssh --web
+        GITHUB_USER=$(gh api user --jq '.login')
+        print_success "Authenticated as: ${GITHUB_USER}"
+    fi
+    export GITHUB_USER
+}
+
+# Check if repo exists
+check_existing_repo() {
+    print_header "Checking for Existing Repository"
+
+    if gh repo view "${GITHUB_USER}/${GITOPS_REPO_NAME}" &> /dev/null; then
+        print_warning "Repository ${GITOPS_REPO_NAME} already exists!"
+        read -p "Delete and recreate? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            gh repo delete "${GITHUB_USER}/${GITOPS_REPO_NAME}" --yes
+            print_success "Repository deleted"
+            sleep 2
+        else
+            print_error "Cannot continue with existing repository"
+            exit 1
+        fi
+    fi
+}
+
+# Create GitHub repo
+create_github_repo() {
+    print_header "Creating GitHub Repository"
+
+    gh repo create "${GITOPS_REPO_NAME}" \
+        --public \
+        --description "GitOps repository for Retail Store Kubernetes deployment"
+
+    print_success "Repository created: https://github.com/${GITHUB_USER}/${GITOPS_REPO_NAME}"
+}
+
 # Create local GitOps repository
 create_local_repo() {
     print_header "Creating Local GitOps Repository"
@@ -234,7 +298,28 @@ spec:
   selector:
     app: {{ .Values.name }}
 EOF
-    
+
+    # Ingress template
+    cat > apps/ui/templates/ingress.yaml << 'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: retail-store-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ .Values.name }}
+            port:
+              number: {{ .Values.service.port }}
+EOF
+
     print_success "UI chart created"
 }
 
@@ -379,18 +464,8 @@ description: Retail Store Dependencies (PostgreSQL, Redis, RabbitMQ)
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
-dependencies:
-  - name: postgresql
-    version: 12.x.x
-    repository: https://charts.bitnami.com/bitnami
-  - name: redis
-    version: 17.x.x
-    repository: https://charts.bitnami.com/bitnami
-  - name: rabbitmq
-    version: 11.x.x
-    repository: https://charts.bitnami.com/bitnami
 EOF
-    
+
     cat > apps/dependencies/values.yaml << EOF
 postgresql:
   auth:
@@ -422,6 +497,158 @@ rabbitmq:
     requests:
       memory: 512Mi
       cpu: 250m
+EOF
+
+    cat > apps/dependencies/templates/postgresql.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  labels:
+    app: postgresql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: postgres:16.1
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "{{ .Values.postgresql.auth.password }}"
+            - name: POSTGRES_USER
+              value: "{{ .Values.postgresql.auth.username }}"
+            - name: POSTGRES_DB
+              value: "{{ .Values.postgresql.auth.database }}"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  labels:
+    app: postgresql
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgresql
+EOF
+
+    cat > apps/dependencies/templates/redis.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-master
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: redis
+EOF
+
+    cat > apps/dependencies/templates/rabbitmq.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  labels:
+    app: rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: "{{ .Values.rabbitmq.auth.username }}"
+            - name: RABBITMQ_DEFAULT_PASS
+              value: "{{ .Values.rabbitmq.auth.password }}"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  labels:
+    app: rabbitmq
+spec:
+  type: ClusterIP
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: management
+      port: 15672
+      targetPort: 15672
+  selector:
+    app: rabbitmq
 EOF
     
     print_success "Dependencies chart created"
@@ -497,7 +724,7 @@ gitops-retail-store-app/
 
 ## Important Notes
 
-- Images pulled from ECR using **ECR Credential Helper** (Option B)
+- Images pulled from ECR using **ECR Credential Helper**
 - No imagePullSecrets needed - IAM role handles authentication
 - All deployments target namespace: \`retail-store\`
 
@@ -516,25 +743,9 @@ EOF
 push_to_github() {
     print_header "Pushing to GitHub"
     
-    print_info "Adding files to git..."
     git add .
     git commit -m "Initial GitOps repository structure"
-    
-    print_info "Creating remote repository..."
-    print_warning "You need to create the repository on GitHub manually:"
-    echo ""
-    echo "1. Go to: https://github.com/new"
-    echo "2. Repository name: ${GITOPS_REPO_NAME}"
-    echo "3. Make it Public or Private (your choice)"
-    echo "4. DO NOT initialize with README"
-    echo "5. Click 'Create repository'"
-    echo ""
-    read -p "Press Enter when repository is created..."
-    
-    print_info "Adding remote origin..."
     git remote add origin git@github.com:${GITHUB_USER}/${GITOPS_REPO_NAME}.git
-    
-    print_info "Pushing to GitHub..."
     git push -u origin "$GITOPS_BRANCH"
     
     print_success "Pushed to GitHub"
@@ -581,15 +792,42 @@ print_summary() {
     echo "  • No imagePullSecrets needed in any manifests"
     echo "  • IAM role handles ECR authentication automatically"
     echo ""
-    echo -e "${BLUE}Next Steps:${NC}"
-    echo "  1. Install ArgoCD:  ./06-argocd-setup.sh"
-    echo "  2. ArgoCD will watch this GitOps repo"
-    echo "  3. Any changes to GitOps repo auto-deploy to cluster"
+    echo -e "${YELLOW}════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  NEXT STEP: Create GITOPS_PAT Secret                   ${NC}"
+    echo -e "${YELLOW}════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${CYAN}This secret allows GitHub Actions to update the GitOps repo.${NC}"
+    echo ""
+    echo -e "${BLUE}Step 1: Create Personal Access Token${NC}"
+    echo "  1. Go to: https://github.com/settings/tokens"
+    echo "  2. Click 'Generate new token' → 'Generate new token (classic)'"
+    echo "  3. Settings:"
+    echo "     - Note: GitOps automation for retail-store"
+    echo "     - Expiration: 90 days (or No expiration)"
+    echo "     - Scopes: Check ✅ 'repo' (Full control)"
+    echo "  4. Click 'Generate token'"
+    echo "  5. COPY THE TOKEN (you won't see it again!)"
+    echo ""
+    echo -e "${BLUE}Step 2: Add Token as Secret${NC}"
+    echo "  1. Go to: https://github.com/${GITHUB_USER}/haddar-retail-store-sample-app/settings/secrets/actions"
+    echo "  2. Click 'New repository secret'"
+    echo "  3. Name: GITOPS_PAT"
+    echo "  4. Secret: Paste your token"
+    echo "  5. Click 'Add secret'"
+    echo ""
+    echo -e "${GREEN}After completing these steps, run:${NC}"
+    echo -e "  ${YELLOW}./06-argocd-setup.sh${NC}"
+    echo "  ArgoCD will watch this GitOps repo"
+    echo "  Any changes to GitOps repo auto-deploy to cluster"
 }
 
 # Main execution
 main() {
     check_prerequisites
+    install_github_cli
+    authenticate_github
+    check_existing_repo
+    create_github_repo
     create_local_repo
     create_directory_structure
     create_ui_chart

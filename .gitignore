@@ -97,4 +97,4 @@ devenv.local.nix
 reports
 env
 oss-output
-kubeconfig_*
+kubeconfig_*gitops-retail-store-app/

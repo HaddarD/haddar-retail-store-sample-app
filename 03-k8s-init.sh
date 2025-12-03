@@ -1,14 +1,23 @@
 #!/bin/bash
 
 ################################################################################
-# Kubernetes kubeadm Cluster Initialization Script (FIXED)
+# Kubernetes kubeadm Cluster Initialization Script
 # Phase 3: Install and configure Kubernetes cluster with ECR Credential Helper
+#
+# FIXES in this version:
+# - IMDSv2 support for IAM role check (no more false warnings)
+# - /etc/default/kubelet created AFTER apt install (no interactive prompts)
+# v2 fixes:
+# - ECR credential provider URL: v1.29.0 (verified 20MB binary)
+# - Verifies kubelet has credential provider flags after init
+# - Fixes kubelet config if flags are missing
+# - Proper apiVersion for K8s 1.28 GA
 #
 # This script:
 # 1. Installs containerd as the container runtime
 # 2. Installs Kubernetes (kubeadm, kubelet, kubectl) on all nodes
 # 3. Installs OFFICIAL AWS ECR Credential Provider on all nodes
-# 4. Creates kubeadm config with kubelet credential provider settings
+# 4. Configures kubelet to use ECR credential provider via IAM role
 # 5. Initializes the Kubernetes cluster on the master node
 # 6. Installs Calico CNI
 # 7. Joins worker nodes to the cluster
@@ -31,8 +40,10 @@ source deployment-info.txt
 KUBERNETES_VERSION="1.28"
 CALICO_VERSION="v3.26.1"
 POD_NETWORK_CIDR="192.168.0.0/16"
-# Official AWS ECR Credential Provider - use version compatible with K8s 1.28
-ECR_CREDENTIAL_PROVIDER_VERSION="v1.28.1"
+
+# WORKING URL - verified to return 20MB binary
+ECR_CREDENTIAL_PROVIDER_URL="https://artifacts.k8s.io/binaries/cloud-provider-aws/v1.29.0/linux/amd64/ecr-credential-provider-linux-amd64"
+ECR_CREDENTIAL_PROVIDER_MIN_SIZE=10000000  # 10MB minimum (actual is ~20MB)
 
 # Colors for output
 RED='\033[0;31m'
@@ -70,6 +81,7 @@ echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════╗"
 echo "║   Kubernetes kubeadm Cluster Initialization          ║"
 echo "║   Phase 3: Setup K8s with ECR Credential Provider    ║"
+echo "║   Version: FULLY FIXED v3                            ║"
 echo "╚═══════════════════════════════════════════════════════╝"
 echo -e "${NC}\n"
 
@@ -175,6 +187,107 @@ echo "✓ Prerequisites installed on $(hostname)"
     run_on_all_nodes "$PREREQ_SCRIPT" "Installing prerequisites"
 }
 
+# Install ECR Credential Provider binary and config (but NOT kubelet config yet)
+install_ecr_credential_provider() {
+    print_header "Installing Official AWS ECR Credential Provider"
+
+    print_info "Downloading ECR credential provider from:"
+    print_info "$ECR_CREDENTIAL_PROVIDER_URL"
+    echo ""
+
+    # Create script with embedded URL and min size
+    # NOTE: This only installs binary and creates the provider config
+    # The kubelet config (/etc/default/kubelet) is done AFTER apt install
+    ECR_PROVIDER_SCRIPT='
+#!/bin/bash
+set -e
+
+echo "=== Installing ECR Credential Provider on $(hostname) ==="
+
+ECR_PROVIDER_URL="'"$ECR_CREDENTIAL_PROVIDER_URL"'"
+MIN_SIZE='"$ECR_CREDENTIAL_PROVIDER_MIN_SIZE"'
+
+# Download the binary
+echo "Downloading ECR credential provider..."
+sudo curl -Lo /usr/local/bin/ecr-credential-provider "$ECR_PROVIDER_URL"
+
+# Verify file was downloaded and is the correct size
+if [ ! -f /usr/local/bin/ecr-credential-provider ]; then
+    echo "❌ ERROR: Download failed - file does not exist"
+    exit 1
+fi
+
+FILE_SIZE=$(stat -c%s /usr/local/bin/ecr-credential-provider 2>/dev/null || stat -f%z /usr/local/bin/ecr-credential-provider 2>/dev/null)
+echo "Downloaded file size: $FILE_SIZE bytes"
+
+if [ "$FILE_SIZE" -lt "$MIN_SIZE" ]; then
+    echo "❌ ERROR: Downloaded file is too small ($FILE_SIZE bytes)"
+    echo "   Expected at least $MIN_SIZE bytes (10MB)"
+    echo "   This usually means the download URL returned an error page"
+    sudo rm -f /usr/local/bin/ecr-credential-provider
+    exit 1
+fi
+
+echo "✓ File size verified: $FILE_SIZE bytes ($(($FILE_SIZE / 1024 / 1024))MB)"
+
+# Make executable
+sudo chmod +x /usr/local/bin/ecr-credential-provider
+
+# Verify it is executable
+if [ ! -x /usr/local/bin/ecr-credential-provider ]; then
+    echo "❌ ERROR: File is not executable"
+    exit 1
+fi
+
+echo "✓ ECR credential provider binary installed and executable"
+
+# Create credential provider configuration directory
+sudo mkdir -p /etc/kubernetes
+
+# Create credential provider configuration file
+# Using apiVersion kubelet.config.k8s.io/v1 (GA in K8s 1.26+)
+sudo tee /etc/kubernetes/ecr-credential-provider-config.yaml > /dev/null <<EOF
+apiVersion: kubelet.config.k8s.io/v1
+kind: CredentialProviderConfig
+providers:
+  - name: ecr-credential-provider
+    matchImages:
+      - "*.dkr.ecr.*.amazonaws.com"
+      - "*.dkr.ecr.*.amazonaws.com.cn"
+      - "*.dkr.ecr-fips.*.amazonaws.com"
+    defaultCacheDuration: "12h"
+    apiVersion: credentialprovider.kubelet.k8s.io/v1
+EOF
+
+echo "✓ ECR credential provider config created at /etc/kubernetes/ecr-credential-provider-config.yaml"
+
+echo ""
+echo "=== ECR Credential Provider Binary Installation Complete on $(hostname) ==="
+'
+
+    run_on_all_nodes "$ECR_PROVIDER_SCRIPT" "Installing ECR Credential Provider"
+
+    # Verify installation on all nodes
+    print_header "Verifying ECR Credential Provider Installation"
+
+    for NODE_INFO in "MASTER:$MASTER_PUBLIC_IP" "WORKER1:$WORKER1_PUBLIC_IP" "WORKER2:$WORKER2_PUBLIC_IP"; do
+        NODE_NAME="${NODE_INFO%%:*}"
+        NODE_IP="${NODE_INFO##*:}"
+
+        FILE_SIZE=$(ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$NODE_IP "stat -c%s /usr/local/bin/ecr-credential-provider 2>/dev/null || echo 0")
+
+        if [ "$FILE_SIZE" -gt "$ECR_CREDENTIAL_PROVIDER_MIN_SIZE" ]; then
+            print_success "${NODE_NAME}: ECR credential provider verified (${FILE_SIZE} bytes / $((FILE_SIZE / 1024 / 1024))MB)"
+        else
+            print_error "${NODE_NAME}: ECR credential provider FAILED (${FILE_SIZE} bytes)"
+            print_error "Installation failed! Please check network connectivity and try again."
+            exit 1
+        fi
+    done
+
+    print_success "ECR Credential Provider installed and verified on ALL nodes!"
+}
+
 # Install Kubernetes packages
 install_kubernetes_packages() {
     print_header "Installing Kubernetes Packages on All Nodes"
@@ -193,7 +306,7 @@ echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.
 
 # Install kubeadm, kubelet, kubectl
 sudo apt-get update
-sudo apt-get install -y kubelet kubeadm kubectl
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kubelet kubeadm kubectl
 sudo apt-mark hold kubelet kubeadm kubectl
 
 echo "✓ Kubernetes packages installed on $(hostname)"
@@ -202,81 +315,52 @@ echo "✓ Kubernetes packages installed on $(hostname)"
     run_on_all_nodes "$K8S_INSTALL_SCRIPT" "Installing Kubernetes packages"
 }
 
-# Install ECR Credential Provider (OFFICIAL AWS version)
-install_ecr_credential_provider() {
-    print_header "Installing Official AWS ECR Credential Provider"
+# Configure kubelet to use ECR credential provider
+# This runs AFTER kubelet is installed to avoid apt conflicts
+configure_kubelet_ecr() {
+    print_header "Configuring Kubelet for ECR Credential Provider"
 
-    print_info "Installing ECR credential provider on all nodes..."
-    print_info "Using official AWS cloud-provider-aws version ${ECR_CREDENTIAL_PROVIDER_VERSION}"
-
-    ECR_PROVIDER_SCRIPT='
+    KUBELET_CONFIG_SCRIPT='
 #!/bin/bash
 set -e
 
-echo "=== Installing ECR Credential Provider on $(hostname) ==="
+echo "=== Configuring kubelet for ECR on $(hostname) ==="
 
-# Download official AWS ECR credential provider
-# Source: https://github.com/kubernetes/cloud-provider-aws
-ECR_PROVIDER_URL="https://artifacts.k8s.io/binaries/cloud-provider-aws/'$ECR_CREDENTIAL_PROVIDER_VERSION'/linux/amd64/ecr-credential-provider-linux-amd64"
+# Configure kubelet to use ECR credential provider
+# Using /etc/default/kubelet (standard location that kubelet.service sources)
+KUBELET_EXTRA_ARGS="--image-credential-provider-config=/etc/kubernetes/ecr-credential-provider-config.yaml --image-credential-provider-bin-dir=/usr/local/bin"
 
-echo "Downloading from: ${ECR_PROVIDER_URL}"
-sudo curl -Lo /usr/local/bin/ecr-credential-provider "${ECR_PROVIDER_URL}"
-sudo chmod +x /usr/local/bin/ecr-credential-provider
-
-# Verify it was downloaded
-if [ ! -f /usr/local/bin/ecr-credential-provider ]; then
-    echo "ERROR: Failed to download ECR credential provider"
-    exit 1
-fi
-
-# Test the binary
-if /usr/local/bin/ecr-credential-provider --help &>/dev/null || /usr/local/bin/ecr-credential-provider version &>/dev/null 2>&1; then
-    echo "✓ ECR credential provider binary is valid"
-else
-    # Some versions dont have --help, check if file is executable
-    if [ -x /usr/local/bin/ecr-credential-provider ]; then
-        echo "✓ ECR credential provider installed (binary executable)"
+# Create or update /etc/default/kubelet
+# At this point, the file either doesnt exist or was created by apt with defaults
+if [ -f /etc/default/kubelet ]; then
+    # Check if it already has our args
+    if grep -q "image-credential-provider-config" /etc/default/kubelet; then
+        echo "✓ Kubelet already configured for ECR"
     else
-        echo "WARNING: Could not verify binary, but continuing..."
+        # Check if KUBELET_EXTRA_ARGS exists
+        if grep -q "^KUBELET_EXTRA_ARGS=" /etc/default/kubelet; then
+            # Append to existing args
+            sudo sed -i "s|^KUBELET_EXTRA_ARGS=\"|KUBELET_EXTRA_ARGS=\"$KUBELET_EXTRA_ARGS |" /etc/default/kubelet
+        else
+            # Add new line
+            echo "KUBELET_EXTRA_ARGS=\"$KUBELET_EXTRA_ARGS\"" | sudo tee -a /etc/default/kubelet
+        fi
+        echo "✓ Added ECR args to existing /etc/default/kubelet"
     fi
+else
+    # Create new file
+    echo "KUBELET_EXTRA_ARGS=\"$KUBELET_EXTRA_ARGS\"" | sudo tee /etc/default/kubelet
+    echo "✓ Created /etc/default/kubelet with ECR args"
 fi
 
-# Create credential provider configuration
-sudo mkdir -p /etc/kubernetes
+echo "Current /etc/default/kubelet:"
+cat /etc/default/kubelet
 
-sudo tee /etc/kubernetes/ecr-credential-provider-config.yaml > /dev/null <<EOF
-apiVersion: kubelet.config.k8s.io/v1
-kind: CredentialProviderConfig
-providers:
-- name: ecr-credential-provider
-  matchImages:
-  - "*.dkr.ecr.*.amazonaws.com"
-  - "*.dkr.ecr.*.amazonaws.com.cn"
-  - "*.dkr.ecr-fips.*.amazonaws.com"
-  defaultCacheDuration: "12h"
-  apiVersion: credentialprovider.kubelet.k8s.io/v1
-EOF
-
-echo "✓ ECR credential provider config created"
-
-# Create kubelet drop-in to add credential provider flags
-# This ensures kubelet uses ECR credential provider from the start
-sudo mkdir -p /etc/systemd/system/kubelet.service.d
-
-sudo tee /etc/systemd/system/kubelet.service.d/20-ecr-credential-provider.conf > /dev/null <<EOF
-[Service]
-Environment="KUBELET_EXTRA_ARGS=--image-credential-provider-config=/etc/kubernetes/ecr-credential-provider-config.yaml --image-credential-provider-bin-dir=/usr/local/bin"
-EOF
-
-# Reload systemd to pick up the drop-in
-sudo systemctl daemon-reload
-
-echo "✓ Kubelet configured to use ECR credential provider on $(hostname)"
+echo ""
+echo "=== Kubelet ECR Configuration Complete on $(hostname) ==="
 '
 
-    run_on_all_nodes "$ECR_PROVIDER_SCRIPT" "Installing ECR Credential Provider"
-
-    print_success "ECR Credential Provider installed on all nodes!"
+    run_on_all_nodes "$KUBELET_CONFIG_SCRIPT" "Configuring kubelet for ECR"
 }
 
 # Initialize Kubernetes cluster on master
@@ -291,7 +375,7 @@ set -e
 echo "=== Initializing Kubernetes cluster ==="
 
 # Initialize the cluster
-# The kubelet will automatically use ECR credential provider via the drop-in we created
+# kubelet will use ECR credential provider via /etc/default/kubelet settings
 sudo kubeadm init \\
     --pod-network-cidr=$POD_NETWORK_CIDR \\
     --apiserver-cert-extra-sans=$MASTER_PUBLIC_IP \\
@@ -309,6 +393,87 @@ EOF
     print_success "Kubernetes cluster initialized on master"
 }
 
+# Verify and fix kubelet credential provider configuration
+verify_and_fix_kubelet() {
+    print_header "Verifying Kubelet Credential Provider Configuration"
+
+    print_info "Checking if kubelet is using credential provider flags..."
+
+    for NODE_INFO in "MASTER:$MASTER_PUBLIC_IP" "WORKER1:$WORKER1_PUBLIC_IP" "WORKER2:$WORKER2_PUBLIC_IP"; do
+        NODE_NAME="${NODE_INFO%%:*}"
+        NODE_IP="${NODE_INFO##*:}"
+
+        echo ""
+        echo "=== Checking ${NODE_NAME} ==="
+
+        ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$NODE_IP << 'VERIFY_SCRIPT'
+#!/bin/bash
+
+# Check if kubelet is running with credential provider flags
+if ps aux | grep -v grep | grep kubelet | grep -q "image-credential-provider"; then
+    echo "✓ Kubelet is using credential provider flags"
+    ps aux | grep -v grep | grep kubelet | grep -o "\-\-image-credential-provider[^ ]*" | head -2
+else
+    echo "⚠ Kubelet NOT using credential provider flags - fixing now..."
+
+    # Check if kubelet is running
+    KUBELET_RUNNING=$(ps aux | grep -v grep | grep -c kubelet || echo 0)
+
+    if [ "$KUBELET_RUNNING" -eq 0 ]; then
+        echo "Kubelet not running yet - /etc/default/kubelet should be picked up on start"
+    else
+        echo "Kubelet running but missing flags - adding to kubeadm-flags.env"
+
+        # Add to kubeadm-flags.env if it exists
+        if [ -f /var/lib/kubelet/kubeadm-flags.env ]; then
+            # Check if already has credential provider flags
+            if ! grep -q "image-credential-provider" /var/lib/kubelet/kubeadm-flags.env; then
+                # Append our flags to the existing KUBELET_KUBEADM_ARGS
+                sudo sed -i 's|"$| --image-credential-provider-config=/etc/kubernetes/ecr-credential-provider-config.yaml --image-credential-provider-bin-dir=/usr/local/bin"|' /var/lib/kubelet/kubeadm-flags.env
+                echo "✓ Added flags to /var/lib/kubelet/kubeadm-flags.env"
+                cat /var/lib/kubelet/kubeadm-flags.env
+
+                # Restart kubelet to pick up changes
+                echo "Restarting kubelet..."
+                sudo systemctl daemon-reload
+                sudo systemctl restart kubelet
+                sleep 5
+
+                # Verify it worked
+                if ps aux | grep -v grep | grep kubelet | grep -q "image-credential-provider"; then
+                    echo "✓ Kubelet now using credential provider flags!"
+                else
+                    echo "⚠ Still not seeing flags - may need manual intervention"
+                fi
+            else
+                echo "Flags already in kubeadm-flags.env but kubelet not using them?"
+            fi
+        else
+            echo "No kubeadm-flags.env found - kubelet may not be initialized yet"
+        fi
+    fi
+fi
+
+# Also verify config file exists
+if [ -f /etc/kubernetes/ecr-credential-provider-config.yaml ]; then
+    echo "✓ Config file exists at /etc/kubernetes/ecr-credential-provider-config.yaml"
+else
+    echo "✗ Config file MISSING!"
+fi
+
+# Verify binary exists and is correct size
+if [ -f /usr/local/bin/ecr-credential-provider ]; then
+    SIZE=$(stat -c%s /usr/local/bin/ecr-credential-provider)
+    echo "✓ Binary exists: $SIZE bytes"
+else
+    echo "✗ Binary MISSING!"
+fi
+VERIFY_SCRIPT
+    done
+
+    print_success "Kubelet verification complete"
+}
+
 # Install Calico CNI
 install_calico() {
     print_header "Installing Calico CNI"
@@ -321,15 +486,12 @@ set -e
 echo "=== Installing Calico CNI ==="
 
 # Install Calico operator
-kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/tigera-operator.yaml
+curl -sL https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml -o /tmp/calico.yaml
+kubectl apply -f /tmp/calico.yaml
 
-# Wait for operator to be ready
-echo "Waiting for Calico operator..."
-sleep 10
-kubectl wait --for=condition=available --timeout=120s deployment/tigera-operator -n tigera-operator || true
-
-# Create Calico custom resource
-kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/custom-resources.yaml
+echo "Waiting for Calico pods..."
+kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=180s || true
+kubectl wait --for=condition=ready pod -l k8s-app=calico-kube-controllers -n kube-system --timeout=180s || true
 
 echo "✓ Calico CNI installed"
 
@@ -445,14 +607,13 @@ setup_local_kubectl() {
     # Update server address to use public IP
     sed -i "s|server: https://.*:6443|server: https://${MASTER_PUBLIC_IP}:6443|" ~/.kube/config-haddar-retail-store
 
-    # Add insecure-skip-tls-verify (needed because cert is for private IP)
-    # Use a proper approach that doesn't corrupt YAML on re-runs
-    if ! grep -q "insecure-skip-tls-verify: true" ~/.kube/config-haddar-retail-store; then
-        # Remove certificate-authority-data and add insecure-skip-tls-verify
-        sed -i '/certificate-authority-data:/d' ~/.kube/config-haddar-retail-store
-        # Add insecure-skip-tls-verify under the cluster section
-        sed -i '/server: https/a\    insecure-skip-tls-verify: true' ~/.kube/config-haddar-retail-store
-    fi
+    # Add insecure-skip-tls-verify properly (idempotent)
+    # First remove any existing insecure-skip-tls-verify lines to avoid duplicates
+    sed -i '/insecure-skip-tls-verify/d' ~/.kube/config-haddar-retail-store
+    # Remove certificate-authority-data (we'll use insecure skip instead)
+    sed -i '/certificate-authority-data:/d' ~/.kube/config-haddar-retail-store
+    # Add insecure-skip-tls-verify under the cluster section
+    sed -i '/server: https/a\    insecure-skip-tls-verify: true' ~/.kube/config-haddar-retail-store
 
     # Export for current session
     export KUBECONFIG=~/.kube/config-haddar-retail-store
@@ -470,52 +631,57 @@ setup_local_kubectl() {
     fi
 }
 
-# Verify ECR credential provider is working
-verify_ecr_setup() {
-    print_header "Verifying ECR Credential Provider Setup"
+# Final verification of ECR credential provider (with IMDSv2 support)
+final_ecr_verification() {
+    print_header "Final ECR Credential Provider Verification"
 
-    print_info "Checking ECR credential provider on master node..."
+    print_info "Verifying kubelet is configured correctly on all nodes..."
 
-    ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$MASTER_PUBLIC_IP << 'EOF'
-echo "=== Checking ECR Credential Provider ==="
+    ALL_GOOD=true
 
-# Check binary exists
-if [ -f /usr/local/bin/ecr-credential-provider ]; then
-    echo "✓ ECR credential provider binary exists"
-else
-    echo "✗ ECR credential provider binary NOT found"
-fi
+    for NODE_INFO in "MASTER:$MASTER_PUBLIC_IP" "WORKER1:$WORKER1_PUBLIC_IP" "WORKER2:$WORKER2_PUBLIC_IP"; do
+        NODE_NAME="${NODE_INFO%%:*}"
+        NODE_IP="${NODE_INFO##*:}"
 
-# Check config exists
-if [ -f /etc/kubernetes/ecr-credential-provider-config.yaml ]; then
-    echo "✓ ECR credential provider config exists"
-else
-    echo "✗ ECR credential provider config NOT found"
-fi
+        echo ""
+        echo "=== ${NODE_NAME} ==="
 
-# Check kubelet drop-in
-if [ -f /etc/systemd/system/kubelet.service.d/20-ecr-credential-provider.conf ]; then
-    echo "✓ Kubelet drop-in config exists"
-else
-    echo "✗ Kubelet drop-in NOT found"
-fi
+        # Check kubelet process for credential provider flags
+        HAS_FLAGS=$(ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$NODE_IP \
+            "ps aux | grep -v grep | grep kubelet | grep -c 'image-credential-provider' || echo 0")
 
-# Check kubelet is using the credential provider
-echo ""
-echo "=== Kubelet Process Check ==="
-ps aux | grep kubelet | grep -v grep | head -1 || echo "(kubelet process info)"
+        if [ "$HAS_FLAGS" -gt 0 ]; then
+            print_success "${NODE_NAME}: Kubelet using credential provider ✓"
+        else
+            print_warning "${NODE_NAME}: Kubelet may not have credential provider flags"
+            ALL_GOOD=false
+        fi
 
-echo ""
-echo "=== IAM Role Check ==="
-# Test if we can reach EC2 metadata (IAM role)
-if curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/iam/security-credentials/ | head -1; then
-    echo "✓ IAM role is attached to this instance"
-else
-    echo "✗ Cannot access IAM role - check EC2 instance profile"
-fi
-EOF
+        # Check IAM role using IMDSv2 (requires token)
+        ROLE=$(ssh -o StrictHostKeyChecking=no -i "$KEY_FILE" ubuntu@$NODE_IP '
+            # Get IMDSv2 token first
+            TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+            if [ -n "$TOKEN" ]; then
+                # Use token to get IAM role
+                curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null | head -1
+            fi
+        ')
 
-    print_success "ECR setup verification complete"
+        if [ -n "$ROLE" ]; then
+            print_success "${NODE_NAME}: IAM role attached: $ROLE"
+        else
+            print_warning "${NODE_NAME}: Could not verify IAM role (may still work)"
+            # Don't fail on this - the ECR provider uses AWS SDK which handles this
+        fi
+    done
+
+    if [ "$ALL_GOOD" = true ]; then
+        print_success "All nodes configured correctly for ECR authentication!"
+    else
+        print_warning "Some nodes may need attention - check warnings above"
+        print_info "You may need to restart kubelet on affected nodes:"
+        print_info "  ssh -i \$KEY_FILE ubuntu@<NODE_IP> 'sudo systemctl restart kubelet'"
+    fi
 }
 
 # Print summary
@@ -532,7 +698,7 @@ print_summary() {
     echo "  Worker Nodes:          2 nodes"
     echo ""
     echo -e "${CYAN}ECR Authentication:${NC}"
-    echo "  ✅ Official AWS ECR Credential Provider installed"
+    echo "  ✅ Official AWS ECR Credential Provider installed (~20MB binary)"
     echo "  ✅ Kubelet configured to use IAM role"
     echo "  ✅ No ECR tokens or imagePullSecrets needed!"
     echo "  ✅ Pods can pull images directly from ECR"
@@ -556,15 +722,17 @@ print_summary() {
 main() {
     check_prerequisites
     install_prerequisites
-    install_kubernetes_packages
-    install_ecr_credential_provider
+    install_ecr_credential_provider      # Install ECR binary and provider config
+    install_kubernetes_packages           # Install K8s packages (creates empty /etc/default/kubelet)
+    configure_kubelet_ecr                 # NOW configure /etc/default/kubelet (no conflict!)
     initialize_cluster
     install_calico
     get_join_command
     join_workers
     verify_cluster
+    verify_and_fix_kubelet               # Verify/fix kubelet after cluster is up
     setup_local_kubectl
-    verify_ecr_setup
+    final_ecr_verification               # Final verification with IMDSv2 support
     print_summary
 
     echo -e "\n${GREEN}╔═══════════════════════════════════════════════════════╗${NC}"

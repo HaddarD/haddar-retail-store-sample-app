@@ -95,13 +95,13 @@ resource "aws_security_group_rule" "kube_controller" {
 # NodePort Services
 # ----------------------------------------------------------------------------
 resource "aws_security_group_rule" "nodeport" {
-  type                     = "ingress"
-  from_port                = 30000
-  to_port                  = 32767
-  protocol                 = "tcp"
-  source_security_group_id = aws_security_group.k8s_nodes.id
-  security_group_id        = aws_security_group.k8s_nodes.id
-  description              = "NodePort Services"
+  type              = "ingress"
+  from_port         = 30000
+  to_port           = 32767
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.k8s_nodes.id
+  description       = "NodePort Services"
 }
 
 # ----------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 # This script does EVERYTHING:
 #   - Starts stopped EC2 instances
 #   - Updates IPs in deployment-info.txt
-#   - Configures kubectl with new master IP
+#   - Configures kubectl with new master IP (idempotent TLS skip)
 #   - Updates ArgoCD and App URLs
 #   - Exports ALL variables to current session
 #
@@ -50,6 +50,7 @@ print_info() {
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DEPLOYMENT_INFO="${SCRIPT_DIR}/deployment-info.txt"
+KUBECONFIG_PATH="$HOME/.kube/config-haddar-retail-store"
 
 # Main header
 echo -e "${BLUE}"
@@ -58,7 +59,7 @@ echo "║   ULTIMATE Startup Script - Does EVERYTHING!     ║"
 echo "║                                                   ║"
 echo "║   ✓ Start EC2 instances                          ║"
 echo "║   ✓ Update IPs                                   ║"
-echo "║   ✓ Configure kubectl                            ║"
+echo "║   ✓ Configure kubectl (idempotent TLS skip)      ║"
 echo "║   ✓ Export ALL variables                         ║"
 echo "╚═══════════════════════════════════════════════════╝"
 echo -e "${NC}\n"
@@ -66,7 +67,7 @@ echo -e "${NC}\n"
 # Check if deployment-info.txt exists
 if [ ! -f "$DEPLOYMENT_INFO" ]; then
     print_error "deployment-info.txt not found!"
-    print_info "Please run 01-infrastructure.sh first"
+    print_info "Please run 02-terraform-apply.sh first"
     return 1 2>/dev/null || exit 1
 fi
 
@@ -186,10 +187,15 @@ start_and_update_instance "$MASTER_INSTANCE_ID" "Master Node" "MASTER_PUBLIC_IP"
 start_and_update_instance "$WORKER1_INSTANCE_ID" "Worker Node 1" "WORKER1_PUBLIC_IP"
 start_and_update_instance "$WORKER2_INSTANCE_ID" "Worker Node 2" "WORKER2_PUBLIC_IP"
 
-# Configure kubectl
+# Configure kubectl with IDEMPOTENT TLS skip
 print_header "Configuring kubectl"
 
-if [ -n "$MASTER_PUBLIC_IP" ] && [ -f "$KEY_FILE" ]; then
+configure_kubeconfig() {
+    if [ -z "$MASTER_PUBLIC_IP" ] || [ ! -f "$KEY_FILE" ]; then
+        print_info "Skipping kubectl config (master IP or key file not available)"
+        return 1
+    fi
+
     print_info "Copying kubeconfig from master node..."
     mkdir -p ~/.kube
 
@@ -199,38 +205,56 @@ if [ -n "$MASTER_PUBLIC_IP" ] && [ -f "$KEY_FILE" ]; then
         sleep 10
     fi
 
-    # Copy kubeconfig
-    if scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$KEY_FILE" \
-        ubuntu@$MASTER_PUBLIC_IP:~/.kube/config ~/.kube/config-haddar-retail-store 2>/dev/null; then
-
-        print_success "Kubeconfig copied"
-
-        # Update server URL with new master IP
-        sed -i "s|server: https://.*:6443|server: https://${MASTER_PUBLIC_IP}:6443|g" ~/.kube/config-haddar-retail-store
-
-        # Remove certificate-authority-data and add insecure-skip-tls-verify
-        sed -i '/certificate-authority-data:/d' ~/.kube/config-haddar-retail-store
-        sed -i '/server: https/a\    insecure-skip-tls-verify: true' ~/.kube/config-haddar-retail-store
-
-        # Export KUBECONFIG for current session
-        export KUBECONFIG=~/.kube/config-haddar-retail-store
-
-        print_success "kubectl configured with new master IP"
-        print_success "KUBECONFIG exported to current session"
-
-        # Test kubectl
-        if kubectl get nodes &>/dev/null; then
-            print_success "kubectl connection verified"
-            kubectl get nodes
-        else
-            print_warning "kubectl configured but cluster may still be initializing"
-        fi
-    else
+    # Copy kubeconfig from master
+    if ! scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$KEY_FILE" \
+        ubuntu@$MASTER_PUBLIC_IP:~/.kube/config "$KUBECONFIG_PATH" 2>/dev/null; then
         print_warning "Could not copy kubeconfig (cluster may not be initialized yet)"
+        return 1
     fi
-else
-    print_info "Skipping kubectl config (master IP or key file not available)"
-fi
+
+    print_success "Kubeconfig copied"
+
+    # === IDEMPOTENT TLS SKIP CONFIGURATION ===
+    # This section is safe to run multiple times without corrupting the YAML
+
+    # Step 1: Update server URL to use public IP
+    sed -i "s|server: https://.*:6443|server: https://${MASTER_PUBLIC_IP}:6443|g" "$KUBECONFIG_PATH"
+
+    # Step 2: Remove any existing insecure-skip-tls-verify lines (cleanup for idempotency)
+    sed -i '/insecure-skip-tls-verify/d' "$KUBECONFIG_PATH"
+
+    # Step 3: Remove certificate-authority-data (we use insecure-skip instead)
+    sed -i '/certificate-authority-data:/d' "$KUBECONFIG_PATH"
+
+    # Step 4: Add insecure-skip-tls-verify after the server line
+    # Using awk for more reliable YAML editing
+    awk '
+    /server: https:/ {
+        print $0
+        print "    insecure-skip-tls-verify: true"
+        next
+    }
+    { print }
+    ' "$KUBECONFIG_PATH" > "${KUBECONFIG_PATH}.tmp" && mv "${KUBECONFIG_PATH}.tmp" "$KUBECONFIG_PATH"
+
+    print_success "TLS skip configured (idempotent)"
+
+    # Export KUBECONFIG for current session
+    export KUBECONFIG="$KUBECONFIG_PATH"
+    print_success "KUBECONFIG exported to current session"
+
+    # Test kubectl
+    if kubectl get nodes &>/dev/null; then
+        print_success "kubectl connection verified"
+        kubectl get nodes
+        return 0
+    else
+        print_warning "kubectl configured but cluster may still be initializing"
+        return 1
+    fi
+}
+
+configure_kubeconfig
 
 # Update ArgoCD URL
 if [ -n "$MASTER_PUBLIC_IP" ]; then
@@ -253,13 +277,13 @@ print_header "Loading ALL Variables"
 source "$DEPLOYMENT_INFO"
 print_success "All variables loaded into current session"
 
-# Also update restore-vars.sh to include KUBECONFIG
+# Update restore-vars.sh to include KUBECONFIG
 if [ -f "${SCRIPT_DIR}/restore-vars.sh" ]; then
     # Check if KUBECONFIG is already in restore-vars.sh
     if ! grep -q "export KUBECONFIG=" "${SCRIPT_DIR}/restore-vars.sh"; then
         echo "" >> "${SCRIPT_DIR}/restore-vars.sh"
         echo "# kubectl configuration" >> "${SCRIPT_DIR}/restore-vars.sh"
-        echo "export KUBECONFIG=~/.kube/config-haddar-retail-store" >> "${SCRIPT_DIR}/restore-vars.sh"
+        echo "export KUBECONFIG=$KUBECONFIG_PATH" >> "${SCRIPT_DIR}/restore-vars.sh"
         print_success "Added KUBECONFIG to restore-vars.sh"
     fi
 fi
@@ -293,7 +317,7 @@ if [ -n "$MASTER_PUBLIC_IP" ] && [ -f "$KEY_FILE" ]; then
     echo -e "${BLUE}Quick Commands:${NC}"
     echo -e "  ${CYAN}kubectl get nodes${NC}                       # Check cluster"
     echo -e "  ${CYAN}kubectl get pods -n retail-store${NC}        # Check apps"
-    echo -e "  ${CYAN}ssh -i $KEY_NAME.pem ubuntu@$MASTER_PUBLIC_IP${NC}  # SSH to master"
+    echo -e "  ${CYAN}ssh -i $KEY_FILE ubuntu@$MASTER_PUBLIC_IP${NC}  # SSH to master"
     echo ""
 fi
 
